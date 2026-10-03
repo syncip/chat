@@ -7,8 +7,9 @@ import { Settings } from './Settings';
 import { BackupGate } from './BackupGate';
 import { Dialog } from './Dialog';
 import { StartChat, NewGroup } from './Dialogs';
+import { ChannelView, CreateChannel, JoinChannel } from './Channels';
 
-type Panel = null | 'settings' | 'new' | 'group';
+type Panel = null | 'settings' | 'new' | 'group' | 'channel' | 'join';
 
 export function Main() {
   const e = useEngine();
@@ -17,12 +18,17 @@ export function Main() {
   const [panel, setPanel] = useState<Panel>(null);
   const [toast, setToast] = useState('');
   const [pending, setPending] = useState<string | null>(null);
+  const [activeChan, setActiveChan] = useState<string | null>(null);
+  const [joinLink, setJoinLink] = useState<string | null>(null);
 
   // Kontaktlink im URL-Fragment (#/add/…) öffnen.
   useEffect(() => {
     const check = () => {
       if (location.hash.startsWith('#/add/')) {
         setPending(location.hash);
+        history.replaceState(null, '', location.pathname);
+      } else if (location.hash.startsWith('#/join/')) {
+        setJoinLink(location.hash);
         history.replaceState(null, '', location.pathname);
       }
     };
@@ -37,9 +43,11 @@ export function Main() {
   const requests = convs.filter((c) => c.status === 'request');
   const list = convs.filter((c) => c.status !== 'request');
   const current = active ? s.conversations[active] : undefined;
+  const chans = Object.values(s.channels ?? {}).sort((a, b) => (b.posts.at(-1)?.ts ?? b.createdAt) - (a.posts.at(-1)?.ts ?? a.createdAt));
+  const currentChan = activeChan ? s.channels?.[activeChan] : undefined;
 
   return (
-    <div className={`layout ${current ? 'chat-open' : ''} ${isInsecureTransport() ? 'with-warning' : ''}`}>
+    <div className={`layout ${current || currentChan ? 'chat-open' : ''} ${isInsecureTransport() ? 'with-warning' : ''}`}>
       {isInsecureTransport() && (
         <div className="transport-warning" role="alert">
           ⚠ Unverschlüsselte Verbindung (http, kein TLS): Nachrichten bleiben Ende-zu-Ende verschlüsselt, aber ein Angreifer im Netzwerk
@@ -55,6 +63,8 @@ export function Main() {
           <div className="row">
             <button title="Neuer Chat" onClick={() => setPanel('new')}>＋</button>
             <button title="Neue Gruppe" onClick={() => setPanel('group')}>👥</button>
+            <button title="Kanal erstellen" onClick={() => setPanel('channel')}>📢</button>
+            <button title="Kanal beitreten" onClick={() => setPanel('join')}>🔗</button>
             <button title="Einstellungen" onClick={() => setPanel('settings')}>⚙</button>
           </div>
         </header>
@@ -69,9 +79,16 @@ export function Main() {
           </div>
         )}
         <div className="convs">
-          {list.length === 0 && <p className="muted pad">Noch keine Chats. Teile deinen Kontaktlink (⚙) oder öffne den Link eines Kontakts (＋).</p>}
+          {chans.map((c) => (
+            <button key={c.id} className={`conv ${c.id === activeChan ? 'active' : ''}`} onClick={() => { setActive(null); setActiveChan(c.id); e.channels.markRead(c.id); }}>
+              <span className="title">📢 {c.title}</span>
+              {c.unread > 0 && <span className="badge">{c.unread}</span>}
+              <span className="preview muted small">{c.me.status === 'pending' ? 'Wartet auf Freigabe' : c.me.status === 'banned' ? 'Gesperrt' : 'Öffentlicher Kanal'}</span>
+            </button>
+          ))}
+          {list.length === 0 && chans.length === 0 && <p className="muted pad">Noch keine Chats. Teile deinen Kontaktlink (⚙) oder öffne den Link eines Kontakts (＋).</p>}
           {list.map((c) => (
-            <button key={c.id} className={`conv ${c.id === active ? 'active' : ''}`} onClick={() => { setActive(c.id); e.markRead(c.id); }}>
+            <button key={c.id} className={`conv ${c.id === active ? 'active' : ''}`} onClick={() => { setActiveChan(null); setActive(c.id); e.markRead(c.id); }}>
               <span className="title">{c.kind === 'group' ? '👥 ' : ''}{c.title}</span>
               {c.unread > 0 && <span className="badge">{c.unread}</span>}
               <span className="preview muted small">{preview(c)}</span>
@@ -80,7 +97,9 @@ export function Main() {
         </div>
       </aside>
       <main>
-        {current ? (
+        {currentChan ? (
+          <ChannelView key={currentChan.id} ch={currentChan} onBack={() => setActiveChan(null)} onGone={() => setActiveChan(null)} />
+        ) : current ? (
           <ChatView key={current.id} conv={current} onBack={() => setActive(null)} onClosed={() => setActive(null)} />
         ) : (
           <div className="center muted">Wähle einen Chat oder starte einen neuen.</div>
@@ -90,6 +109,11 @@ export function Main() {
       {panel === 'settings' && <Settings onClose={() => setPanel(null)} />}
       {panel === 'new' && <StartChat onClose={() => setPanel(null)} onStarted={(id) => { setPanel(null); setActive(id); }} />}
       {panel === 'group' && <NewGroup onClose={() => setPanel(null)} onCreated={(id) => { setPanel(null); setActive(id); }} />}
+      {panel === 'channel' && <CreateChannel onClose={() => setPanel(null)} onCreated={(id) => { setPanel(null); setActive(null); setActiveChan(id); }} />}
+      {(panel === 'join' || joinLink) && (
+        <JoinChannel key={joinLink ?? 'manual'} initial={joinLink ?? undefined} onClose={() => { setPanel(null); setJoinLink(null); }}
+          onJoined={(id) => { setPanel(null); setJoinLink(null); setActive(null); setActiveChan(id); }} />
+      )}
       {pending && (
         <Dialog title="Kontakt hinzufügen" onClose={() => setPending(null)}>
           <PendingCard link={pending} onDone={(id) => { setPending(null); if (id) setActive(id); }} onError={setToast} />

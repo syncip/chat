@@ -47,6 +47,11 @@ fn verify_sig(aik: &[u8], msg: &[u8], sig: &[u8]) -> Result<()> {
     key.verify_strict(msg, &Signature::from_bytes(&sig)).map_err(|_| Error::Crypto("device certificate invalid"))
 }
 
+/// Ed25519-Signatur prüfen (z. B. Kanal-Beiträge, signiert mit dem Konto-Schlüssel).
+pub fn verify_ed25519(pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    verify_sig(pk, msg, sig).is_ok()
+}
+
 /// Prüft Credential-Bytes gegen den Signaturschlüssel des Blatts (`dpk`).
 pub fn verify_credential(bytes: &[u8], dpk: &[u8]) -> Result<DeviceIdentity> {
     let w: Wire = serde_json::from_slice(bytes).map_err(|_| Error::Invalid("credential"))?;

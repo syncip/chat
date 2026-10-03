@@ -29,6 +29,9 @@ services:
       CHAT_MESSAGE_RETENTION_DAYS: ${CHAT_MESSAGE_RETENTION_DAYS:-30}
       # Nur falls ein Reverse-Proxy/Tunnel davor steht: Header mit der Client-IP (nur für Rate-Limits, es wird nichts geloggt).
       # Leer lassen, wenn der Server direkt erreichbar ist.
+      CHAT_CHANNELS: ${CHAT_CHANNELS:-true}                    # öffentliche Kanäle
+      CHAT_MAX_CHANNELS: ${CHAT_MAX_CHANNELS:-10}              # Kanäle je Nutzer
+      CHAT_MAX_CHANNEL_MEMBERS: ${CHAT_MAX_CHANNEL_MEMBERS:-5000}
       CHAT_TRUST_PROXY_HEADER: ${CHAT_TRUST_PROXY_HEADER:-}
     volumes:
       - chat-data:/data

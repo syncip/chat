@@ -116,6 +116,62 @@ export interface AppState {
   sendRead: boolean;
   /** Einmal-Nachrichten: eigene Kopie sofort entfernen. */
   onceDropOwnCopy: boolean;
+  /** Öffentliche Kanäle (Schlüssel stehen auch in der Backup-Datei, damit neue Geräte sie bekommen). */
+  channels?: Record<string, ChannelState>;
+}
+
+export interface ChannelPolicy {
+  join_mode: 'open' | 'approval' | 'pow' | 'captcha';
+  pow_bits: number;
+  probation_seconds: number;
+  members_can_write: boolean;
+  slow_mode_seconds: number;
+}
+
+export interface ChannelMember {
+  ik: string;
+  address: string;
+  role: 'owner' | 'mod' | 'write' | 'member' | 'read';
+  status: 'active' | 'pending' | 'banned';
+  joined_at: number;
+  muted_until: number;
+  can_write: boolean;
+}
+
+export interface ChPost {
+  id: string;
+  seq: number;
+  ts: number;
+  from: string;
+  ik: string;
+  parts: Part[];
+  deleted?: boolean;
+  /** Signatur oder Entschlüsselung fehlgeschlagen. */
+  bad?: boolean;
+}
+
+export interface ChEvent {
+  seq: number;
+  ts: number;
+  kind: string;
+  actor: string;
+  targetAddress: string;
+  meta: Record<string, unknown>;
+}
+
+export interface ChannelState {
+  id: string;
+  server: string;
+  /** Kanalschlüssel (base64); nur im Link und lokal. */
+  key: string;
+  title: string;
+  policy: ChannelPolicy;
+  me: ChannelMember;
+  posts: ChPost[];
+  events: ChEvent[];
+  cursor: number;
+  unread: number;
+  createdAt: number;
 }
 
 export interface ServerInfo {

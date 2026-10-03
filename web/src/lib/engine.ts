@@ -3,6 +3,7 @@
  * Alle Nachrichteninhalte werden hier ver- und entschlüsselt; der Server sieht nur Blobs.
  */
 import { Api, ApiError } from './api';
+import { ChannelManager } from './channels';
 import { loadCore, type Client, type Core, type Vault } from './core';
 import { kv } from './db';
 import type {
@@ -65,6 +66,22 @@ export class Engine {
   private relays: { convId: string; entry: CapEntry; sender: string }[] = [];
   private receipts: { convId: string; kind: 'delivered' | 'read'; ids: string[] }[] = [];
   private reconciling = false;
+  readonly channels: ChannelManager;
+
+  constructor() {
+    const self = this;
+    this.channels = new ChannelManager({
+      get core() {
+        return self.core;
+      },
+      state: () => self.state!,
+      sign: (d) => self.client!.signAccount(d),
+      ik: () => self.client!.identityPublic(),
+      address: () => self.state!.me.address,
+      notify: () => self.dirty(),
+      homeCall: (m, u, b) => self.api!.call(m, u, b),
+    });
+  }
 
   subscribe = (l: Listener) => {
     this.listeners.add(l);
@@ -172,7 +189,7 @@ export class Engine {
     });
     const st = this.emptyState({ address: j.address, domain, name, deviceId: reg.deviceId, inboxId: reg.inboxId });
     const sync = j.sync ?? {};
-    for (const k of ['contacts', 'blockedUsers', 'blockedServers', 'allowUsers', 'allowServers', 'filterMode', 'serverSideFilter', 'directSend', 'sendDelivered', 'sendRead', 'onceDropOwnCopy', 'intro'] as const) {
+    for (const k of ['contacts', 'blockedUsers', 'blockedServers', 'allowUsers', 'allowServers', 'filterMode', 'serverSideFilter', 'directSend', 'sendDelivered', 'sendRead', 'onceDropOwnCopy', 'intro', 'channels'] as const) {
       if (sync[k] !== undefined) (st as unknown as Record<string, unknown>)[k] = sync[k];
     }
     st.backupDone = true; // das Backup existiert ja bereits
@@ -204,6 +221,7 @@ export class Engine {
     this.state.sendDelivered ??= false;
     this.state.sendRead ??= false;
     this.state.onceDropOwnCopy ??= false;
+    this.state.channels ??= {};
   }
 
   /**
@@ -216,6 +234,7 @@ export class Engine {
       contacts: s.contacts, blockedUsers: s.blockedUsers, blockedServers: s.blockedServers, allowUsers: s.allowUsers,
       allowServers: s.allowServers, filterMode: s.filterMode, serverSideFilter: s.serverSideFilter, directSend: s.directSend,
       sendDelivered: s.sendDelivered, sendRead: s.sendRead, onceDropOwnCopy: s.onceDropOwnCopy, intro: s.intro,
+      channels: Object.fromEntries(Object.entries(s.channels ?? {}).map(([k, c]) => [k, { ...c, posts: [], events: [], cursor: 0, unread: 0 }])),
     };
     const json = JSON.stringify({ v: 2, address: s.me.address, aik: b64(this.client!.exportIdentity()), sync });
     return this.core.vaultSeal(passphrase, enc.encode(json));
@@ -237,7 +256,7 @@ export class Engine {
   }
 
   /** Zustand speichern (entprellt). */
-  private dirty() {
+  dirty() {
     this.emit();
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
@@ -257,6 +276,7 @@ export class Engine {
   async lock(): Promise<void> {
     await this.flush();
     this.closed = true;
+    this.channels.stop();
     this.timers.forEach(clearInterval);
     this.timers = [];
     this.ws?.close();
@@ -293,6 +313,7 @@ export class Engine {
     }
     this.emit();
     this.connect();
+    this.channels.start();
     this.timers.push(setInterval(() => this.purgeExpired(), 30_000));
     this.timers.push(setInterval(() => void this.retryOutbox(), 30_000));
   }

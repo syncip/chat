@@ -15,6 +15,7 @@ Android- und iOS-Clients dieselbe API und denselben Krypto-Kern nutzen können.
 - Identität = Ed25519-Schlüsselpaar, kein Telefon/E-Mail; Login per Signatur; Registrierung per Einladung
 - **Multi-Device:** mehrere Geräte gleichzeitig pro Konto, Anmeldung neuer Geräte per Backup-Datei (Pflicht nach der Registrierung)
 - Zustell-/Lesebestätigungen (pro Nutzer einstellbar, Standard aus), Einmal-Nachrichten, einklappbarer Code
+- **Öffentliche Kanäle** (Telegram-ähnlich, Beitritt per Link; offen/Freigabe/Proof-of-Work/Captcha, Rechte global und je Nutzer, Timeouts, Moderation), siehe [docs/CHANNELS.md](docs/CHANNELS.md)
 - **Föderation:** eigene Server betreiben, auf fremden Servern registrieren, serverübergreifend chatten
 - **Blockieren** (Nutzer/Server), Allowlist-Modus, Anfragen-Prinzip für Erstkontakte
 - Dateilimits (100 MB/Datei, 10 GB/Nutzer, pro Nachricht) vom Betreiber einstellbar
@@ -86,6 +87,7 @@ Benötigt: Rust (+ `wasm32-unknown-unknown`, `wasm-bindgen-cli 0.2.129`), Go ≥
 | `CHAT_MAX_MESSAGE_ATTACHMENTS` / `…_TOTAL_SIZE` | 10 / 500 MB | pro Nachricht (clientseitig durchgesetzt) |
 | `CHAT_BLOB_RETENTION_DAYS`, `CHAT_MESSAGE_RETENTION_DAYS` | 30 | Aufbewahrung |
 | `CHAT_FEDERATION_ALLOW_PRIVATE` | `false` | Föderation mit privaten/lokalen Adressen (LAN) erlauben |
+| `CHAT_CHANNELS` / `CHAT_MAX_CHANNELS` / `CHAT_MAX_CHANNEL_MEMBERS` | an / 10 / 5000 | öffentliche Kanäle: Schalter, Kanäle je Nutzer, Mitglieder je Kanal |
 | `CHAT_TRUST_PROXY_HEADER` | – | Header mit Client-IP hinter Tunnel/Proxy (nur für Rate-Limits) |
 
 ## Dokumente
@@ -93,6 +95,7 @@ Benötigt: Rust (+ `wasm32-unknown-unknown`, `wasm-bindgen-cli 0.2.129`), Go ≥
 | Dokument | Inhalt |
 |---|---|
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Wogegen der Chat schützt und wogegen nicht |
+| [docs/CHANNELS.md](docs/CHANNELS.md) | Öffentliche Kanäle: Schlüssel, Rechte, Beitrittsregeln, Grenzen |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | Identität, MLS, Postfächer, Föderation, Dateien, Blockieren, Abweichungen/Offenes (§11) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Komponenten, Tech-Stack, Hosting |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phasen, Stand, offene Fragen |

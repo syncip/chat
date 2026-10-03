@@ -244,3 +244,8 @@ pub fn sha256(data: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
     Sha256::digest(data).to_vec()
 }
+
+#[wasm_bindgen(js_name = ed25519Verify)]
+pub fn ed25519_verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    crate::device::verify_ed25519(pk, msg, sig)
+}

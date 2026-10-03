@@ -301,6 +301,9 @@ func (s *Store) AppendPost(chID, postID string, ik []byte, address string, tsMil
 
 // AppendEvent fügt ein Moderations-/Mitgliedsereignis an.
 func (s *Store) AppendEvent(chID, kind string, actor, target []byte, address string, meta map[string]any) (int64, error) {
+	if meta == nil {
+		meta = map[string]any{}
+	}
 	mj, _ := json.Marshal(meta)
 	res, err := s.db.Exec(`INSERT INTO channel_log(channel_id,type,kind,ik,target,address,ts,meta) VALUES(?,'event',?,?,?,?,?,?)`,
 		chID, kind, actor, target, address, time.Now().UnixMilli(), string(mj))

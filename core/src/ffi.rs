@@ -221,6 +221,11 @@ pub fn vault_open_plain(pass: String, blob: Vec<u8>) -> R<Vec<u8>> {
 }
 
 #[uniffi::export]
+pub fn ed25519_verify(pk: Vec<u8>, msg: Vec<u8>, sig: Vec<u8>) -> bool {
+    crate::device::verify_ed25519(&pk, &msg, &sig)
+}
+
+#[uniffi::export]
 pub fn envelope_key() -> Vec<u8> {
     envelope::random_key().to_vec()
 }

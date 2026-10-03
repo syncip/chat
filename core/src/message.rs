@@ -32,6 +32,9 @@ pub enum ReceiptKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CapEntry {
     pub address: String,
+    /// Gerät, dem dieses Postfach gehört (jedes Gerät hat eigene Unterhaltungs-Postfächer).
+    #[serde(default)]
+    pub device: String,
     pub domain: String,
     pub mailbox_id: String,
     pub send_token: String,

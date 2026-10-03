@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("conflict")
+	ErrLimit    = errors.New("limit reached")
 )
 
 type Store struct{ db *sql.DB }
@@ -28,6 +31,14 @@ CREATE TABLE IF NOT EXISTS users(
   filter_mode TEXT NOT NULL DEFAULT 'off',
   quota INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS devices(
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id TEXT NOT NULL,
+  dpk BLOB NOT NULL,
+  cert BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(user_id, id)
+);
 CREATE TABLE IF NOT EXISTS invites(
   hash BLOB PRIMARY KEY,
   expires_at INTEGER NOT NULL,
@@ -37,25 +48,28 @@ CREATE TABLE IF NOT EXISTS invites(
 CREATE TABLE IF NOT EXISTS keypackages(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
   data BLOB NOT NULL,
   last_resort INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS kp_user ON keypackages(user_id, last_resort);
+CREATE INDEX IF NOT EXISTS kp_user ON keypackages(user_id, device_id, last_resort);
 CREATE TABLE IF NOT EXISTS mailboxes(
   id TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash BLOB NOT NULL,
-  intro INTEGER NOT NULL DEFAULT 0
+  intro INTEGER NOT NULL DEFAULT 0,
+  device_id TEXT NOT NULL DEFAULT ''  -- leer: kontoweit (Zustellung an alle Geräte); sonst nur dieses Gerät (Geräte-Postfach)
 );
 CREATE INDEX IF NOT EXISTS mb_user ON mailboxes(user_id);
 CREATE TABLE IF NOT EXISTS messages(
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
   mailbox_id TEXT NOT NULL,
   data BLOB NOT NULL,
   created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS msg_user ON messages(user_id, seq);
+CREATE INDEX IF NOT EXISTS msg_dev ON messages(user_id, device_id, seq);
 CREATE TABLE IF NOT EXISTS blobs(
   id TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -71,17 +85,51 @@ CREATE TABLE IF NOT EXISTS filters(
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v BLOB NOT NULL);
 `
 
-func Open(dir string) (*Store, error) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "chat.db")+
+// SchemaVersion: 2 = Multi-Device. Ältere Datenbanken sind inkompatibel (Credentials/Protokoll) und werden beiseitegelegt.
+const SchemaVersion = 2
+
+func open(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", "file:"+path+
 		"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // SQLite: ein Schreiber; vermeidet Sperrkonflikte
+	return db, nil
+}
+
+func Open(dir string) (*Store, error) {
+	path := filepath.Join(dir, "chat.db")
+	db, err := open(path)
+	if err != nil {
+		return nil, err
+	}
+	// Vorhandene Datenbank ohne devices-Tabelle = Schema v1 (vor Multi-Device).
+	var hasUsers, hasDevices int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&hasUsers)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='devices'`).Scan(&hasDevices)
+	if hasUsers > 0 && hasDevices == 0 {
+		db.Close()
+		bak := path + ".bak-v1"
+		if err := os.Rename(path, bak); err != nil {
+			return nil, fmt.Errorf("alte Datenbank sichern: %w", err)
+		}
+		for _, ext := range []string{"-wal", "-shm"} {
+			_ = os.Rename(path+ext, bak+ext)
+		}
+		slog.Warn("Datenbank-Schema v1 ist mit Multi-Device inkompatibel: Konten müssen neu angelegt werden", "backup", bak)
+		if db, err = open(path); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
-	return &Store{db}, nil
+	st := &Store{db}
+	if err := st.SetMeta("schema_version", []byte(fmt.Sprint(SchemaVersion))); err != nil {
+		return nil, err
+	}
+	return st, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -129,8 +177,23 @@ func (s *Store) UserCount() (n int, err error) {
 	return
 }
 
-// Register legt Nutzer, Intro-Postfach und (optional) KeyPackages atomar an; verbraucht die Einladung.
-func (s *Store) Register(inviteHash []byte, name string, ik []byte, intro MailboxInit, kps [][]byte, lastResort []byte) error {
+// Device ist ein Gerät eines Kontos (siehe docs/MULTIDEVICE.md).
+type Device struct {
+	ID        string
+	UserID    int64
+	DPK       []byte // öffentlicher Geräteschlüssel (Anfragen-Signatur)
+	Cert      []byte // Zertifikat des Konto-Schlüssels über (Adresse, Geräte-ID, DPK)
+	CreatedAt int64
+}
+
+// Inbox ist ein Postfach nur für ein Gerät (ID/Token deterministisch aus dem Konto-Schlüssel abgeleitet).
+type Inbox struct {
+	MailboxID string
+	TokenHash []byte
+}
+
+// Register legt Nutzer, erstes Gerät, Geräte-Inbox, Intro-Postfach und KeyPackages atomar an; verbraucht die Einladung.
+func (s *Store) Register(inviteHash []byte, name string, ik []byte, dev Device, inbox Inbox, intro MailboxInit, kps [][]byte, lastResort []byte) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -150,16 +213,101 @@ func (s *Store) Register(inviteHash []byte, name string, ik []byte, intro Mailbo
 		return ErrConflict
 	}
 	uid, _ := res.LastInsertId()
+	if err := insertDevice(tx, uid, dev, inbox, kps, lastResort); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`INSERT INTO mailboxes(id,user_id,token_hash,intro) VALUES(?,?,?,1)`, intro.ID, uid, intro.TokenHash); err != nil {
 		return err
 	}
+	return tx.Commit()
+}
+
+func insertDevice(tx *sql.Tx, uid int64, dev Device, inbox Inbox, kps [][]byte, lastResort []byte) error {
+	if _, err := tx.Exec(`INSERT INTO devices(user_id,id,dpk,cert,created_at) VALUES(?,?,?,?,?)`, uid, dev.ID, dev.DPK, dev.Cert, now()); err != nil {
+		return ErrConflict
+	}
+	if _, err := tx.Exec(`INSERT INTO mailboxes(id,user_id,token_hash,device_id) VALUES(?,?,?,?)`, inbox.MailboxID, uid, inbox.TokenHash, dev.ID); err != nil {
+		return ErrConflict
+	}
 	for _, kp := range kps {
-		if _, err := tx.Exec(`INSERT INTO keypackages(user_id,data) VALUES(?,?)`, uid, kp); err != nil {
+		if _, err := tx.Exec(`INSERT INTO keypackages(user_id,device_id,data) VALUES(?,?,?)`, uid, dev.ID, kp); err != nil {
 			return err
 		}
 	}
 	if lastResort != nil {
-		if _, err := tx.Exec(`INSERT INTO keypackages(user_id,data,last_resort) VALUES(?,?,1)`, uid, lastResort); err != nil {
+		if _, err := tx.Exec(`INSERT INTO keypackages(user_id,device_id,data,last_resort) VALUES(?,?,?,1)`, uid, dev.ID, lastResort); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AddDevice fügt einem bestehenden Konto ein Gerät hinzu (höchstens `max` aktive Geräte).
+func (s *Store) AddDevice(uid int64, dev Device, inbox Inbox, kps [][]byte, lastResort []byte, max int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices WHERE user_id=?`, uid).Scan(&n); err != nil {
+		return err
+	}
+	if n >= max {
+		return ErrLimit
+	}
+	if err := insertDevice(tx, uid, dev, inbox, kps, lastResort); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeviceByID(uid int64, id string) (*Device, error) {
+	d := &Device{UserID: uid}
+	err := s.db.QueryRow(`SELECT id,dpk,cert,created_at FROM devices WHERE user_id=? AND id=?`, uid, id).Scan(&d.ID, &d.DPK, &d.Cert, &d.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return d, err
+}
+
+func (s *Store) ListDevices(uid int64) ([]Device, error) {
+	rows, err := s.db.Query(`SELECT id,dpk,cert,created_at FROM devices WHERE user_id=? ORDER BY id`, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Device
+	for rows.Next() {
+		d := Device{UserID: uid}
+		if err := rows.Scan(&d.ID, &d.DPK, &d.Cert, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// RevokeDevice entfernt ein Gerät samt KeyPackages, Geräte-Inbox und wartenden Nachrichten.
+func (s *Store) RevokeDevice(uid int64, id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM devices WHERE user_id=? AND id=?`, uid, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	for _, q := range []string{
+		`DELETE FROM keypackages WHERE user_id=? AND device_id=?`,
+		`DELETE FROM mailboxes WHERE user_id=? AND device_id=?`,
+		`DELETE FROM messages WHERE user_id=? AND device_id=?`,
+	} {
+		if _, err := tx.Exec(q, uid, id); err != nil {
 			return err
 		}
 	}
@@ -198,64 +346,98 @@ func (s *Store) CreateInvite(hash []byte, ttl time.Duration, uses int, by int64)
 
 // ---- KeyPackages ----
 
-func (s *Store) AddKeyPackages(uid int64, kps [][]byte, lastResort []byte, max int) error {
+func (s *Store) AddKeyPackages(uid int64, deviceID string, kps [][]byte, lastResort []byte, max int) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var n int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM keypackages WHERE user_id=? AND last_resort=0`, uid).Scan(&n); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM keypackages WHERE user_id=? AND device_id=? AND last_resort=0`, uid, deviceID).Scan(&n); err != nil {
 		return err
 	}
 	if n+len(kps) > max {
 		return ErrConflict
 	}
 	for _, kp := range kps {
-		if _, err := tx.Exec(`INSERT INTO keypackages(user_id,data) VALUES(?,?)`, uid, kp); err != nil {
+		if _, err := tx.Exec(`INSERT INTO keypackages(user_id,device_id,data) VALUES(?,?,?)`, uid, deviceID, kp); err != nil {
 			return err
 		}
 	}
 	if lastResort != nil {
-		if _, err := tx.Exec(`DELETE FROM keypackages WHERE user_id=? AND last_resort=1`, uid); err != nil {
+		if _, err := tx.Exec(`DELETE FROM keypackages WHERE user_id=? AND device_id=? AND last_resort=1`, uid, deviceID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO keypackages(user_id,data,last_resort) VALUES(?,?,1)`, uid, lastResort); err != nil {
+		if _, err := tx.Exec(`INSERT INTO keypackages(user_id,device_id,data,last_resort) VALUES(?,?,?,1)`, uid, deviceID, lastResort); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
 
-func (s *Store) KeyPackageCount(uid int64) (n int, err error) {
-	err = s.db.QueryRow(`SELECT COUNT(*) FROM keypackages WHERE user_id=? AND last_resort=0`, uid).Scan(&n)
+func (s *Store) KeyPackageCount(uid int64, deviceID string) (n int, err error) {
+	err = s.db.QueryRow(`SELECT COUNT(*) FROM keypackages WHERE user_id=? AND device_id=? AND last_resort=0`, uid, deviceID).Scan(&n)
 	return
 }
 
-// TakeKeyPackage liefert ein Einmal-KeyPackage (und löscht es) oder das Last-Resort-Paket.
-func (s *Store) TakeKeyPackage(uid int64) ([]byte, error) {
+// DeviceKeyPackage ist ein KeyPackage eines Geräts.
+type DeviceKeyPackage struct {
+	DeviceID string
+	Data     []byte
+}
+
+// TakeKeyPackages liefert je Gerät ein Einmal-KeyPackage (und löscht es) oder das Last-Resort-Paket.
+func (s *Store) TakeKeyPackages(uid int64, only []string) ([]DeviceKeyPackage, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	var id int64
-	var data []byte
-	err = tx.QueryRow(`SELECT id,data FROM keypackages WHERE user_id=? AND last_resort=0 ORDER BY id LIMIT 1`, uid).Scan(&id, &data)
-	if err == nil {
-		if _, err := tx.Exec(`DELETE FROM keypackages WHERE id=?`, id); err != nil {
-			return nil, err
-		}
-		return data, tx.Commit()
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	rows, err := tx.Query(`SELECT id FROM devices WHERE user_id=? ORDER BY id`, uid)
+	if err != nil {
 		return nil, err
 	}
-	err = tx.QueryRow(`SELECT data FROM keypackages WHERE user_id=? AND last_resort=1`, uid).Scan(&data)
-	if errors.Is(err, sql.ErrNoRows) {
+	var devs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		devs = append(devs, id)
+	}
+	rows.Close()
+	var out []DeviceKeyPackage
+	for _, dev := range devs {
+		if len(only) > 0 && !contains(only, dev) {
+			continue
+		}
+		var id int64
+		var data []byte
+		err := tx.QueryRow(`SELECT id,data FROM keypackages WHERE user_id=? AND device_id=? AND last_resort=0 ORDER BY id LIMIT 1`, uid, dev).Scan(&id, &data)
+		if err == nil {
+			if _, err := tx.Exec(`DELETE FROM keypackages WHERE id=?`, id); err != nil {
+				return nil, err
+			}
+			out = append(out, DeviceKeyPackage{dev, data})
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		err = tx.QueryRow(`SELECT data FROM keypackages WHERE user_id=? AND device_id=? AND last_resort=1`, uid, dev).Scan(&data)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // Gerät ohne KeyPackages (noch nicht bereit)
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, DeviceKeyPackage{dev, data})
+	}
+	if len(out) == 0 {
 		return nil, ErrNotFound
 	}
-	return data, err
+	return out, tx.Commit()
 }
 
 // ---- Postfächer ----
@@ -270,25 +452,31 @@ type Mailbox struct {
 	UserID    int64
 	TokenHash []byte
 	Intro     bool
+	DeviceID  string // leer: kontoweit
 }
 
-func (s *Store) CreateMailbox(uid int64, m MailboxInit, max int) error {
+// CreateMailbox legt ein Postfach **nur für das Gerät** `deviceID` an (leer: kontoweit).
+func (s *Store) CreateMailbox(uid int64, deviceID string, intro bool, m MailboxInit, max int) error {
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mailboxes WHERE user_id=?`, uid).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mailboxes WHERE user_id=? AND device_id=?`, uid, deviceID).Scan(&n); err != nil {
 		return err
 	}
 	if n >= max {
 		return ErrConflict
 	}
-	_, err := s.db.Exec(`INSERT INTO mailboxes(id,user_id,token_hash) VALUES(?,?,?)`, m.ID, uid, m.TokenHash)
+	in := 0
+	if intro {
+		in = 1
+	}
+	_, err := s.db.Exec(`INSERT INTO mailboxes(id,user_id,token_hash,intro,device_id) VALUES(?,?,?,?,?)`, m.ID, uid, m.TokenHash, in, deviceID)
 	return err
 }
 
 func (s *Store) Mailbox(id string) (*Mailbox, error) {
 	m := &Mailbox{}
 	var intro int
-	err := s.db.QueryRow(`SELECT id,user_id,token_hash,intro FROM mailboxes WHERE id=?`, id).
-		Scan(&m.ID, &m.UserID, &m.TokenHash, &intro)
+	err := s.db.QueryRow(`SELECT id,user_id,token_hash,intro,device_id FROM mailboxes WHERE id=?`, id).
+		Scan(&m.ID, &m.UserID, &m.TokenHash, &intro, &m.DeviceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -296,8 +484,8 @@ func (s *Store) Mailbox(id string) (*Mailbox, error) {
 	return m, err
 }
 
-func (s *Store) ListMailboxes(uid int64) ([]Mailbox, error) {
-	rows, err := s.db.Query(`SELECT id,intro FROM mailboxes WHERE user_id=?`, uid)
+func (s *Store) ListMailboxes(uid int64, deviceID string) ([]Mailbox, error) {
+	rows, err := s.db.Query(`SELECT id,intro,device_id FROM mailboxes WHERE user_id=? AND (device_id='' OR device_id=?)`, uid, deviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +494,7 @@ func (s *Store) ListMailboxes(uid int64) ([]Mailbox, error) {
 	for rows.Next() {
 		var m Mailbox
 		var i int
-		if err := rows.Scan(&m.ID, &i); err != nil {
+		if err := rows.Scan(&m.ID, &i, &m.DeviceID); err != nil {
 			return nil, err
 		}
 		m.Intro = i == 1
@@ -317,13 +505,13 @@ func (s *Store) ListMailboxes(uid int64) ([]Mailbox, error) {
 }
 
 // DeleteMailbox widerruft ein Postfach samt noch nicht abgeholter Nachrichten (= Kontakt blockieren).
-func (s *Store) DeleteMailbox(uid int64, id string) error {
+func (s *Store) DeleteMailbox(uid int64, deviceID, id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`DELETE FROM mailboxes WHERE id=? AND user_id=?`, id, uid)
+	res, err := tx.Exec(`DELETE FROM mailboxes WHERE id=? AND user_id=? AND (device_id='' OR device_id=?)`, id, uid, deviceID)
 	if err != nil {
 		return err
 	}
@@ -344,16 +532,45 @@ type Message struct {
 	Data      []byte
 }
 
-func (s *Store) Deliver(uid int64, mailboxID string, data []byte) (int64, error) {
-	res, err := s.db.Exec(`INSERT INTO messages(user_id,mailbox_id,data,created_at) VALUES(?,?,?,?)`, uid, mailboxID, data, now())
+// Deliver legt die Nachricht für jedes aktive Gerät des Kontos (bzw. nur für das Gerät eines Geräte-Postfachs) in die Warteschlange.
+// Gibt (Gerät → seq) zurück.
+func (s *Store) Deliver(uid int64, mailboxID, onlyDevice string, data []byte) (map[string]int64, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return res.LastInsertId()
+	defer tx.Rollback()
+	var devs []string
+	if onlyDevice != "" {
+		devs = []string{onlyDevice}
+	} else {
+		rows, err := tx.Query(`SELECT id FROM devices WHERE user_id=?`, uid)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			devs = append(devs, id)
+		}
+		rows.Close()
+	}
+	out := map[string]int64{}
+	for _, d := range devs {
+		res, err := tx.Exec(`INSERT INTO messages(user_id,device_id,mailbox_id,data,created_at) VALUES(?,?,?,?,?)`, uid, d, mailboxID, data, now())
+		if err != nil {
+			return nil, err
+		}
+		out[d], _ = res.LastInsertId()
+	}
+	return out, tx.Commit()
 }
 
-func (s *Store) Messages(uid, after int64, limit int) ([]Message, error) {
-	rows, err := s.db.Query(`SELECT seq,mailbox_id,data FROM messages WHERE user_id=? AND seq>? ORDER BY seq LIMIT ?`, uid, after, limit)
+func (s *Store) Messages(uid int64, deviceID string, after int64, limit int) ([]Message, error) {
+	rows, err := s.db.Query(`SELECT seq,mailbox_id,data FROM messages WHERE user_id=? AND device_id=? AND seq>? ORDER BY seq LIMIT ?`, uid, deviceID, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -369,8 +586,8 @@ func (s *Store) Messages(uid, after int64, limit int) ([]Message, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) AckMessages(uid, upto int64) error {
-	_, err := s.db.Exec(`DELETE FROM messages WHERE user_id=? AND seq<=?`, uid, upto)
+func (s *Store) AckMessages(uid int64, deviceID string, upto int64) error {
+	_, err := s.db.Exec(`DELETE FROM messages WHERE user_id=? AND device_id=? AND seq<=?`, uid, deviceID, upto)
 	return err
 }
 
@@ -461,4 +678,13 @@ func (s *Store) UserByID(id int64) (*User, error) {
 		return nil, ErrNotFound
 	}
 	return u, err
+}
+
+func contains(l []string, v string) bool {
+	for _, x := range l {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

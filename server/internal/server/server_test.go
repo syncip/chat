@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -44,7 +45,7 @@ func newNode(t *testing.T, mod func(*config.Config)) *node {
 		MaxFileSize: 1 << 20, MaxAttachments: 10, MaxMessageTotal: 5 << 20, MaxMessageText: 1 << 16,
 		MaxEnvelopeSize: 64 << 10, UserQuota: 3 << 20, BlobRetention: time.Hour, MessageRetention: time.Hour,
 		Federation: "open", FedInsecure: true, RatePerMinute: 100000, MaxMailboxes: 50, MaxKeyPackages: 5,
-		UserInvites: true, RegistrationPoW: 8,
+		UserInvites: true, RegistrationPoW: 8, MaxDevices: 10,
 	}
 	if mod != nil {
 		mod(cfg)
@@ -63,12 +64,37 @@ func newNode(t *testing.T, mod func(*config.Config)) *node {
 	return &node{t: t, cfg: cfg, srv: srv, ts: ts, domain: domain}
 }
 
+// device: Geräteschlüssel (DSK) + Geräte-ID; das Konto (AIK) beglaubigt es per Zertifikat.
+type device struct {
+	id   string
+	pub  ed25519.PublicKey
+	priv ed25519.PrivateKey
+}
+
 type user struct {
-	n     *node
-	name  string
-	pub   ed25519.PublicKey
-	priv  ed25519.PrivateKey
-	intro struct{ ID, Token string }
+	n    *node
+	name string
+	pub  ed25519.PublicKey // AIK
+	priv ed25519.PrivateKey
+	dev  device
+	// inboxID: Geräte-Postfach (nur bei per addDevice erzeugten Nutzern gesetzt)
+	inboxID string
+	intro   struct{ ID, Token string }
+}
+
+func (n *node) newDevice(name string, aik ed25519.PrivateKey) (device, map[string]any, map[string]any) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	idb := make([]byte, 8)
+	_, _ = rand.Read(idb)
+	id := hex.EncodeToString(idb)
+	cert := ed25519.Sign(aik, []byte("CHAT-DEVICE-V1\n"+name+"@"+n.domain+"\n"+id+"\n"+hex.EncodeToString(pub)))
+	mb := make([]byte, 16)
+	_, _ = rand.Read(mb)
+	mbID := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(mb))
+	th := sha256.Sum256([]byte("inbox-token-" + id))
+	return device{id, pub, priv},
+		map[string]any{"id": id, "dpk": b64.EncodeToString(pub), "cert": b64.EncodeToString(cert)},
+		map[string]any{"mailbox_id": mbID, "token_hash": b64.EncodeToString(th[:])}
 }
 
 func (n *node) invite() string {
@@ -107,15 +133,17 @@ func (n *node) register(name, invite string) (*user, *http.Response) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	ts := time.Now().Unix()
 	msg := "CHAT-REGISTER-V1\n" + n.domain + "\n" + name + "\n" + strconv.FormatInt(ts, 10)
+	dev, devJSON, inboxJSON := n.newDevice(name, priv)
 	body, _ := json.Marshal(map[string]any{
 		"invite": invite, "name": name, "ik": b64.EncodeToString(pub), "ts": ts,
 		"sig":         b64.EncodeToString(ed25519.Sign(priv, []byte(msg))),
 		"keypackages": []string{b64.EncodeToString([]byte("kp1")), b64.EncodeToString([]byte("kp2"))},
 		"last_resort": b64.EncodeToString([]byte("lastresort")),
+		"device":      devJSON, "inbox": inboxJSON,
 	})
 	req, _ := http.NewRequest("POST", n.ts.URL+"/v1/register", bytes.NewReader(body))
 	resp := do(n.t, req)
-	u := &user{n: n, name: name, pub: pub, priv: priv}
+	u := &user{n: n, name: name, pub: pub, priv: priv, dev: dev}
 	return u, resp
 }
 
@@ -136,8 +164,8 @@ func (u *user) sign(method, uri string, body []byte, nonce string, ts int64) str
 	sum := sha256.Sum256(body)
 	t := strconv.FormatInt(ts, 10)
 	msg := "CHAT-REQ-V1\n" + u.n.domain + "\n" + method + "\n" + uri + "\n" + t + "\n" + nonce + "\n" + hex.EncodeToString(sum[:])
-	sig := ed25519.Sign(u.priv, []byte(msg))
-	return "Chat-Sig name=" + u.name + ",ts=" + t + ",nonce=" + nonce + ",sig=" + b64.EncodeToString(sig)
+	sig := ed25519.Sign(u.dev.priv, []byte(msg))
+	return "Chat-Sig name=" + u.name + ",dev=" + u.dev.id + ",ts=" + t + ",nonce=" + nonce + ",sig=" + b64.EncodeToString(sig)
 }
 
 func nonce() string { b := make([]byte, 12); _, _ = rand.Read(b); return b64.EncodeToString(b) }
@@ -231,7 +259,8 @@ func TestOpenRegistrationWithPoW(t *testing.T) {
 	tss := strconv.FormatInt(ts, 10)
 	reg := func(pow string) int {
 		sig := ed25519.Sign(priv, []byte("CHAT-REGISTER-V1\n"+n.domain+"\nalice\n"+tss))
-		body, _ := json.Marshal(map[string]any{"name": "alice", "ik": b64.EncodeToString(pub), "ts": ts, "sig": b64.EncodeToString(sig), "pow": pow})
+		_, devJSON, inboxJSON := n.newDevice("alice", priv)
+		body, _ := json.Marshal(map[string]any{"name": "alice", "ik": b64.EncodeToString(pub), "ts": ts, "sig": b64.EncodeToString(sig), "pow": pow, "device": devJSON, "inbox": inboxJSON})
 		req, _ := http.NewRequest("POST", n.ts.URL+"/v1/register", bytes.NewReader(body))
 		resp := do(t, req)
 		resp.Body.Close()
@@ -329,19 +358,29 @@ func (n *node) introID(u *user) string { return u.intro.ID }
 func TestKeyPackages(t *testing.T) {
 	n := newNode(t, nil)
 	alice := n.mustUser("alice")
-	get := func() (kp string, code int) {
-		resp, err := http.Get(n.ts.URL + "/v1/users/alice/keypackage")
+	type dk struct{ Device, Keypackage string }
+	get := func() (kps []string, code int) {
+		resp, err := http.Get(n.ts.URL + "/v1/users/alice/keypackages")
 		if err != nil {
 			t.Fatal(err)
 		}
-		var out struct{ Keypackage string }
+		var out struct {
+			IK      string
+			Devices []dk
+		}
 		defer resp.Body.Close()
 		_ = json.NewDecoder(resp.Body).Decode(&out)
-		d, _ := b64.DecodeString(out.Keypackage)
-		return string(d), resp.StatusCode
+		for _, d := range out.Devices {
+			if d.Device != alice.dev.id {
+				t.Fatalf("unexpected device %s", d.Device)
+			}
+			b, _ := b64.DecodeString(d.Keypackage)
+			kps = append(kps, string(b))
+		}
+		return kps, resp.StatusCode
 	}
 	for _, want := range []string{"kp1", "kp2", "lastresort", "lastresort"} {
-		if got, c := get(); c != 200 || got != want {
+		if got, c := get(); c != 200 || len(got) != 1 || got[0] != want {
 			t.Fatalf("got %q (%d) want %q", got, c, want)
 		}
 	}
@@ -356,7 +395,7 @@ func TestKeyPackages(t *testing.T) {
 	}
 	alice.call("PUT", "/v1/keypackages", map[string]any{"keypackages": kps}, 400, nil) // > MaxKeyPackages
 	alice.call("PUT", "/v1/keypackages", map[string]any{"keypackages": kps[:3]}, 204, nil)
-	if r, _ := http.Get(n.ts.URL + "/v1/users/nobody/keypackage"); r.StatusCode != 404 {
+	if r, _ := http.Get(n.ts.URL + "/v1/users/nobody/keypackages"); r.StatusCode != 404 {
 		t.Fatal("unknown user")
 	}
 }
@@ -369,11 +408,11 @@ func TestBlobsQuotaAndLimits(t *testing.T) {
 		t0 := time.Now().Unix()
 		nc := nonce()
 		m := "CHAT-REQ-V1\n" + n.domain + "\nPOST\n" + uri + "\n" + strconv.FormatInt(t0, 10) + "\n" + nc + "\nUNSIGNED"
-		sig := b64.EncodeToString(ed25519.Sign(alice.priv, []byte(m)))
+		sig := b64.EncodeToString(ed25519.Sign(alice.dev.priv, []byte(m)))
 		r, _ := http.NewRequest("POST", n.ts.URL+uri, bytes.NewReader(data))
 		r.ContentLength = int64(len(data))
 		r.Header.Set("X-Body-Hash", "UNSIGNED")
-		r.Header.Set("Authorization", "Chat-Sig name=alice,ts="+strconv.FormatInt(t0, 10)+",nonce="+nc+",sig="+sig)
+		r.Header.Set("Authorization", "Chat-Sig name=alice,dev="+alice.dev.id+",ts="+strconv.FormatInt(t0, 10)+",nonce="+nc+",sig="+sig)
 		resp := do(t, r)
 		var out struct {
 			BlobID string `json:"blob_id"`
@@ -456,9 +495,14 @@ func TestFederationRelay(t *testing.T) {
 		t.Fatalf("wrong token over fed: %d", c)
 	}
 	// KeyPackage über Home-Server auflösen
-	var kp struct{ Keypackage string }
-	alice.call("GET", "/v1/resolve/bob@"+b.domain+"/keypackage", nil, 200, &kp)
-	if d, _ := b64.DecodeString(kp.Keypackage); string(d) != "kp1" {
+	var kp struct {
+		Devices []struct{ Device, Keypackage string }
+	}
+	alice.call("GET", "/v1/resolve/bob@"+b.domain+"/keypackages", nil, 200, &kp)
+	if len(kp.Devices) != 1 {
+		t.Fatalf("resolve: %+v", kp)
+	}
+	if d, _ := b64.DecodeString(kp.Devices[0].Keypackage); string(d) != "kp1" {
 		t.Fatalf("resolve: %q", d)
 	}
 
@@ -554,8 +598,8 @@ func TestWebSocketPush(t *testing.T) {
 	nc := nonce()
 	ts := time.Now().Unix()
 	m := "CHAT-REQ-V1\n" + n.domain + "\nGET\n/v1/stream\n" + strconv.FormatInt(ts, 10) + "\n" + nc + "\nWS"
-	auth, _ := json.Marshal(map[string]string{"name": "alice", "ts": strconv.FormatInt(ts, 10), "nonce": nc,
-		"sig": b64.EncodeToString(ed25519.Sign(alice.priv, []byte(m)))})
+	auth, _ := json.Marshal(map[string]string{"name": "alice", "dev": alice.dev.id, "ts": strconv.FormatInt(ts, 10), "nonce": nc,
+		"sig": b64.EncodeToString(ed25519.Sign(alice.dev.priv, []byte(m)))})
 	if err := c.Write(ctx, websocket.MessageText, auth); err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +615,7 @@ func TestWebSocketPush(t *testing.T) {
 	// ungültige Auth wird abgelehnt
 	c2, _, _ := websocket.Dial(ctx, "ws"+strings.TrimPrefix(n.ts.URL, "http")+"/v1/stream", nil)
 	defer c2.CloseNow()
-	_ = c2.Write(ctx, websocket.MessageText, []byte(`{"name":"alice","ts":"1","nonce":"12345678","sig":"AAAA"}`))
+	_ = c2.Write(ctx, websocket.MessageText, []byte(`{"name":"alice","dev":"0123456789abcdef","ts":"1","nonce":"12345678","sig":"AAAA"}`))
 	if _, _, err := c2.Read(ctx); err == nil {
 		t.Fatal("unauthenticated ws accepted")
 	}
@@ -610,4 +654,154 @@ func TestUserInvites(t *testing.T) {
 	}
 	n.cfg.UserInvites = false
 	alice.call("POST", "/v1/invites", nil, 403, nil)
+}
+
+// addDevice: zweites Gerät, beglaubigt durch den Konto-Schlüssel (kein Altgerät nötig).
+func (u *user) addDevice(sigKey ed25519.PrivateKey, ts int64) (*user, *http.Response) {
+	dev, devJSON, inboxJSON := u.n.newDevice(u.name, u.priv)
+	t := strconv.FormatInt(ts, 10)
+	msg := "CHAT-ADD-DEVICE-V1\n" + u.n.domain + "\n" + u.name + "\n" + t + "\n" + dev.id
+	body, _ := json.Marshal(map[string]any{
+		"name": u.name, "ts": ts, "sig": b64.EncodeToString(ed25519.Sign(sigKey, []byte(msg))),
+		"device": devJSON, "inbox": inboxJSON,
+		"keypackages": []string{b64.EncodeToString([]byte("kp-dev2"))}, "last_resort": b64.EncodeToString([]byte("last-dev2")),
+	})
+	r, _ := http.NewRequest("POST", u.n.ts.URL+"/v1/devices", bytes.NewReader(body))
+	resp := do(u.n.t, r)
+	d2 := *u
+	d2.dev = dev
+	d2.inboxID = inboxJSON["mailbox_id"].(string)
+	return &d2, resp
+}
+
+func TestMultiDevice(t *testing.T) {
+	n := newNode(t, func(c *config.Config) { c.MaxDevices = 3 })
+	d1 := n.mustUser("alice")
+	// falsche Beglaubigung (nicht vom Konto-Schlüssel) → abgelehnt
+	_, evilPriv, _ := ed25519.GenerateKey(rand.Reader)
+	if _, r := d1.addDevice(evilPriv, time.Now().Unix()); r.StatusCode != 401 {
+		t.Fatalf("add with foreign key: %d", r.StatusCode)
+	}
+	// alter Zeitstempel
+	if _, r := d1.addDevice(d1.priv, time.Now().Add(-10*time.Minute).Unix()); r.StatusCode != 400 {
+		t.Fatalf("add with old ts: %d", r.StatusCode)
+	}
+	d2, r := d1.addDevice(d1.priv, time.Now().Unix())
+	if r.StatusCode != 201 {
+		t.Fatalf("add device: %d", r.StatusCode)
+	}
+
+	var devs []struct {
+		ID      string
+		Current bool
+	}
+	d1.call("GET", "/v1/devices", nil, 200, &devs)
+	if len(devs) != 2 {
+		t.Fatalf("devices: %+v", devs)
+	}
+	// Zertifikat von einem fremden Konto-Schlüssel wird abgelehnt (anderes Konto)
+	bob := n.mustUser("bob")
+	_, devJSON, inboxJSON := n.newDevice("alice", bob.priv) // „alice“-Gerät, beglaubigt von Bobs AIK
+	ts := time.Now().Unix()
+	msg := "CHAT-ADD-DEVICE-V1\n" + n.domain + "\nalice\n" + strconv.FormatInt(ts, 10) + "\n" + devJSON["id"].(string)
+	body, _ := json.Marshal(map[string]any{"name": "alice", "ts": ts, "sig": b64.EncodeToString(ed25519.Sign(d1.priv, []byte(msg))), "device": devJSON, "inbox": inboxJSON})
+	rq, _ := http.NewRequest("POST", n.ts.URL+"/v1/devices", bytes.NewReader(body))
+	if resp := do(t, rq); resp.StatusCode != 400 {
+		t.Fatalf("bad cert: %d", resp.StatusCode)
+	}
+
+	// Unterhaltungs-Postfächer gehören dem Gerät, das sie angelegt hat
+	id0, tok0 := d1.newMailbox()
+	put(n, id0, tok0, []byte("nur geraet 1")).Body.Close()
+	if len(d2.messages(0)) != 0 || len(d1.messages(0)) != 1 {
+		t.Fatal("conversation mailbox must be device-level")
+	}
+	d1.call("DELETE", "/v1/messages?upto="+strconv.FormatInt(d1.messages(0)[0].Seq, 10), nil, 204, nil)
+	// Gerät 2 darf das Postfach von Gerät 1 nicht löschen
+	d2.call("DELETE", "/v1/mailboxes/"+id0, nil, 404, nil)
+
+	// Kontoweites (Intro-)Postfach: jedes Gerät bekommt eine eigene Kopie, Acks sind unabhängig
+	put(n, d1.intro.ID, d1.intro.Token, []byte("an alle geraete")).Body.Close()
+	m1, m2 := d1.messages(0), d2.messages(0)
+	if len(m1) != 1 || len(m2) != 1 {
+		t.Fatalf("fan-out: %d / %d", len(m1), len(m2))
+	}
+	d1.call("DELETE", "/v1/messages?upto="+strconv.FormatInt(m1[0].Seq, 10), nil, 204, nil)
+	if len(d1.messages(0)) != 0 || len(d2.messages(0)) != 1 {
+		t.Fatal("ack must be per device")
+	}
+
+	// Geräte-Postfach: nur dieses Gerät
+	put(n, d2.inboxID, "inbox-token-"+d2.dev.id, []byte("nur geraet 2")).Body.Close()
+	if len(d1.messages(0)) != 0 {
+		t.Fatal("device inbox leaked to other device")
+	}
+	if got := d2.messages(0); len(got) != 2 {
+		t.Fatalf("device inbox: %d", len(got))
+	}
+
+	// KeyPackages: eines je Gerät
+	resp, _ := http.Get(n.ts.URL + "/v1/users/alice/keypackages")
+	var kps struct{ Devices []struct{ Device string } }
+	mustJSON(t, resp, 200, &kps)
+	if len(kps.Devices) != 2 {
+		t.Fatalf("keypackages per device: %+v", kps)
+	}
+
+	// Gerätelimit (3): ein drittes geht, ein viertes nicht
+	if _, r := d1.addDevice(d1.priv, time.Now().Unix()); r.StatusCode != 201 {
+		t.Fatalf("third device: %d", r.StatusCode)
+	}
+	if _, r := d1.addDevice(d1.priv, time.Now().Unix()); r.StatusCode != 429 {
+		t.Fatalf("limit: %d", r.StatusCode)
+	}
+
+	// Widerruf: Gerät 2 kann sich nicht mehr anmelden, sein Postfach ist weg
+	d1.call("DELETE", "/v1/devices/"+d2.dev.id, nil, 204, nil)
+	if resp := do(t, d2.req("GET", "/v1/mailboxes", nil)); resp.StatusCode != 401 {
+		t.Fatalf("revoked device still authenticated: %d", resp.StatusCode)
+	}
+	if r := put(n, d2.inboxID, "inbox-token-"+d2.dev.id, []byte("x")); r.StatusCode != 404 {
+		t.Fatalf("revoked inbox: %d", r.StatusCode)
+	}
+	d1.call("DELETE", "/v1/devices/"+d2.dev.id, nil, 404, nil)
+}
+
+func TestCannotRevokeLastDevice(t *testing.T) {
+	n := newNode(t, nil)
+	a := n.mustUser("alice")
+	a.call("DELETE", "/v1/devices/"+a.dev.id, nil, 409, nil)
+}
+
+func TestWebSocketDeviceEvents(t *testing.T) {
+	n := newNode(t, nil)
+	d1 := n.mustUser("alice")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(n.ts.URL, "http")+"/v1/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	nc := nonce()
+	ts := time.Now().Unix()
+	m := "CHAT-REQ-V1\n" + n.domain + "\nGET\n/v1/stream\n" + strconv.FormatInt(ts, 10) + "\n" + nc + "\nWS"
+	auth, _ := json.Marshal(map[string]string{"name": "alice", "dev": d1.dev.id, "ts": strconv.FormatInt(ts, 10), "nonce": nc,
+		"sig": b64.EncodeToString(ed25519.Sign(d1.dev.priv, []byte(m)))})
+	_ = c.Write(ctx, websocket.MessageText, auth)
+	if _, b, err := c.Read(ctx); err != nil || !strings.Contains(string(b), "ready") {
+		t.Fatalf("ready: %s %v", b, err)
+	}
+	d2, r := d1.addDevice(d1.priv, time.Now().Unix())
+	if r.StatusCode != 201 {
+		t.Fatal(r.StatusCode)
+	}
+	if _, b, err := c.Read(ctx); err != nil || !strings.Contains(string(b), `"devices"`) {
+		t.Fatalf("device event: %s %v", b, err)
+	}
+	// Widerruf trennt die Verbindung des Geräts: Gerät 1 widerruft sich selbst nicht; wir widerrufen Gerät 2 und erwarten ein weiteres Ereignis
+	d1.call("DELETE", "/v1/devices/"+d2.dev.id, nil, 204, nil)
+	if _, b, err := c.Read(ctx); err != nil || !strings.Contains(string(b), `"devices"`) {
+		t.Fatalf("revoke event: %s %v", b, err)
+	}
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Conversation, Msg } from '../lib/types';
-import { snippetOf } from '../lib/engine';
+import { memberAddresses, snippetOf } from '../lib/engine';
 import { formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
 import { MessageView } from './Message';
@@ -129,7 +129,7 @@ function ChatHeader({ conv, onBack, onInfo }: { conv: Conversation; onBack: () =
     <header className="chat-header">
       <button className="back" onClick={onBack} aria-label="Zurück">←</button>
       <div className="grow"><strong>{conv.title}</strong>
-        <div className="muted small">{conv.kind === 'group' ? `${conv.members.length} Mitglieder` : 'Ende-zu-Ende-verschlüsselt'}{conv.disappearSeconds ? ` · ⏱ ${fmtDur(conv.disappearSeconds)}` : ''}</div>
+        <div className="muted small">{conv.kind === 'group' ? `${memberAddresses(conv).length} Mitglieder` : 'Ende-zu-Ende-verschlüsselt'}{conv.disappearSeconds ? ` · ⏱ ${fmtDur(conv.disappearSeconds)}` : ''}</div>
       </div>
       <button onClick={onInfo} aria-label="Details">ⓘ</button>
     </header>
@@ -147,7 +147,7 @@ function ConvInfo({ conv, onClose, onGone }: { conv: Conversation; onClose: () =
   const s = e.state!;
   const [add, setAdd] = useState('');
   const [err, setErr] = useState('');
-  const others = conv.members.filter((m) => m.address !== s.me.address);
+  const others = memberAddresses(conv).filter((a) => a !== s.me.address).map((address) => ({ address }));
   const dmContacts = Object.values(s.conversations).filter((c) => c.kind === 'dm' && c.status === 'active')
     .map((c) => c.members.find((m) => m.address !== s.me.address)?.address).filter((a): a is string => !!a && !conv.members.some((m) => m.address === a));
   const run = async (f: () => Promise<void> | void) => { setErr(''); try { await f(); } catch (x) { setErr((x as Error).message); } };

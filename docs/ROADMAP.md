@@ -8,7 +8,7 @@
 | 3 | Gruppen, verschlüsselte Dateien, Quoten/Limits, Reaktionen/Bearbeiten/Löschen, verschwindende Nachrichten | ✅ |
 | 4 | Föderation: Discovery, S2S-Zustellung, Relay, Registrierung auf fremden Servern | ✅ (getestet mit zwei Servern) |
 | 5 | Blockieren (Nutzer/Server), Allowlist-Modus | ✅ · Postfach-Rotation ⬜ |
-| 6 | Härtung | Padding ✅, Umschlag-Schicht ✅, SSRF-/Replay-Schutz ✅ · Multi-Device ⬜, Key Transparency ⬜, PQ-Hybrid ⬜, externer Review ⬜ |
+| 6 | Härtung | Padding ✅, Umschlag-Schicht ✅, SSRF-/Replay-Schutz ✅ · Multi-Device ✅, Key Transparency ⬜, PQ-Hybrid ⬜, externer Review ⬜ |
 | 7 | Native Clients | Android: Engine ✅ (getestet, Interop mit Web ✅), App-Hülle geschrieben, **nicht kompiliert** ⚠ · Windows ⬜ · Linux ⬜ · iOS ⬜ |
 
 ## Offene Fragen
@@ -19,5 +19,5 @@
 4. Cover-Traffic / Zufalls-Verzögerungen gegen Timing-Korrelation: ab wann?
 5. Lizenz AGPL-3.0 bestätigen und `LICENSE` ergänzen (Volltext konnte in dieser Umgebung nicht geladen werden).
 6. BIP39-Recovery-Phrase statt Backup-Datei.
-7. Mehr Geräte pro Konto (MLS-Leaf pro Gerät, Self-Gruppe).
+7. Laufende Synchronisation von Einstellungen/Kontakten zwischen Geräten (Self-Gruppe).
 8. Admin-Rollen in Gruppen.

@@ -38,7 +38,7 @@ class UnitTest {
         val json = """{"v":1,"id":"1","ts":5,"content":{"kind":"message","parts":[{"type":"quote","reference":"r","snippet":"s"},{"type":"text","body":"b"}]}}"""
         val e = ChatJson.decodeFromString(Envelope.serializer(), json)
         assertEquals(json, ChatJson.encodeToString(Envelope.serializer(), e))
-        val dir = """{"v":1,"id":"2","ts":1,"content":{"kind":"directory","entries":[{"address":"a@b.c","domain":"b.c","mailbox_id":"m","send_token":"t","key":"k"}]}}"""
+        val dir = """{"v":1,"id":"2","ts":1,"content":{"kind":"directory","entries":[{"address":"a@b.c","device":"0123456789abcdef","domain":"b.c","mailbox_id":"m","send_token":"t","key":"k"}]}}"""
         assertEquals(dir, ChatJson.encodeToString(Envelope.serializer(), ChatJson.decodeFromString(Envelope.serializer(), dir)))
     }
 

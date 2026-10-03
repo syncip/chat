@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
 	"math/bits"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +20,15 @@ const maxSkew = 60 * time.Second
 
 type ctxKey struct{}
 
-// Authorization: Chat-Sig name=<n>,ts=<unix>,nonce=<b64>,sig=<b64>
+var devRe = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
+// devOf liefert das (per Signatur geprüfte) Gerät der aktuellen Anfrage.
+func devOf(r *http.Request) *store.Device {
+	d, _ := r.Context().Value(ctxKey{}).(*store.Device)
+	return d
+}
+
+// Authorization: Chat-Sig name=<n>,dev=<geräte-id>,ts=<unix>,nonce=<b64>,sig=<b64>   (Signatur mit dem Geräteschlüssel)
 // Signiert wird: "CHAT-REQ-V1\n<domain>\n<METHOD>\n<RequestURI>\n<ts>\n<nonce>\n<hex sha256(body)>"
 // Der Server-Domain-Bezug verhindert Replay gegen andere Server.
 func canonicalRequest(domain, method, uri, ts, nonce, bodyHash string) []byte {
@@ -41,34 +51,38 @@ func parseAuth(h string) map[string]string {
 	return m
 }
 
-func (s *Server) verifySig(domain, method, uri string, a map[string]string, bodyHash string) (*store.User, bool) {
-	name, ts, nonce, sig := a["name"], a["ts"], a["nonce"], a["sig"]
-	if name == "" || ts == "" || len(nonce) < 8 || len(nonce) > 64 || sig == "" {
-		return nil, false
+func (s *Server) verifySig(domain, method, uri string, a map[string]string, bodyHash string) (*store.User, *store.Device, bool) {
+	name, dev, ts, nonce, sig := a["name"], a["dev"], a["ts"], a["nonce"], a["sig"]
+	if name == "" || !devRe.MatchString(dev) || ts == "" || len(nonce) < 8 || len(nonce) > 64 || sig == "" {
+		return nil, nil, false
 	}
 	t, err := strconv.ParseInt(ts, 10, 64)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	if d := time.Since(time.Unix(t, 0)); d > maxSkew || d < -maxSkew {
-		return nil, false
+		return nil, nil, false
 	}
 	sigb, err := b64.DecodeString(sig)
 	if err != nil || len(sigb) != ed25519.SignatureSize {
-		return nil, false
+		return nil, nil, false
 	}
 	u, err := s.st.UserByName(name)
-	if err != nil || len(u.IK) != ed25519.PublicKeySize {
-		return nil, false
+	if err != nil {
+		return nil, nil, false
 	}
-	if !ed25519.Verify(u.IK, canonicalRequest(domain, method, uri, ts, nonce, bodyHash), sigb) {
-		return nil, false
+	d, err := s.st.DeviceByID(u.ID, dev) // widerrufene Geräte existieren nicht mehr
+	if err != nil || len(d.DPK) != ed25519.PublicKeySize {
+		return nil, nil, false
+	}
+	if !ed25519.Verify(d.DPK, canonicalRequest(domain, method, uri, ts, nonce, bodyHash), sigb) {
+		return nil, nil, false
 	}
 	// Nonce erst nach gültiger Signatur merken (kein Cache-Flooding durch Unbefugte).
-	if s.nonces.seen(name + ":" + nonce) {
-		return nil, false
+	if s.nonces.seen(name + ":" + dev + ":" + nonce) {
+		return nil, nil, false
 	}
-	return u, true
+	return u, d, true
 }
 
 type userHandler func(w http.ResponseWriter, r *http.Request, u *store.User)
@@ -87,13 +101,13 @@ func (s *Server) auth(h userHandler) http.HandlerFunc {
 			return
 		}
 		sum := sha256.Sum256(body)
-		u, ok := s.verifySig(s.cfg.Domain, r.Method, r.URL.RequestURI(), a, hex.EncodeToString(sum[:]))
+		u, d, ok := s.verifySig(s.cfg.Domain, r.Method, r.URL.RequestURI(), a, hex.EncodeToString(sum[:]))
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		h(w, r, u)
+		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, d)), u)
 	}
 }
 
@@ -106,12 +120,12 @@ func (s *Server) authStream(h userHandler) http.HandlerFunc {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		u, ok := s.verifySig(s.cfg.Domain, r.Method, r.URL.RequestURI(), a, "UNSIGNED")
+		u, d, ok := s.verifySig(s.cfg.Domain, r.Method, r.URL.RequestURI(), a, "UNSIGNED")
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		h(w, r, u)
+		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, d)), u)
 	}
 }
 

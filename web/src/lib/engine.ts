@@ -6,7 +6,7 @@ import { Api, ApiError } from './api';
 import { loadCore, type Client, type Core, type Vault } from './core';
 import { kv } from './db';
 import type {
-  AppState, Cap, CapEntry, Conversation, Content, Contact, Envelope, FilterMode, Msg, Part, ServerInfo,
+  AppState, Cap, CapEntry, Conversation, Content, Contact, DeviceInfo, Envelope, FilterMode, Msg, Part, ServerInfo,
 } from './types';
 import {
   b64, dec, enc, hex, randomId, sha256, solvePow, splitAddress, unb64, unhex,
@@ -64,6 +64,7 @@ export class Engine {
   private backoff = 1000;
   private relays: { convId: string; entry: CapEntry; sender: string }[] = [];
   private receipts: { convId: string; kind: 'delivered' | 'read'; ids: string[] }[] = [];
+  private reconciling = false;
 
   subscribe = (l: Listener) => {
     this.listeners.add(l);
@@ -88,6 +89,30 @@ export class Engine {
 
   // ---------- Konto ----------
 
+  /** Geräte-Registrierung: Zertifikat des Konto-Schlüssels, Geräte-Inbox (aus dem AIK abgeleitet), KeyPackages. */
+  private async deviceRegistration(client: Client) {
+    const deviceId = client.deviceId();
+    const inbox = JSON.parse(client.deviceInbox(deviceId)) as { mailbox_id: string; token: string; key: string };
+    return {
+      deviceId,
+      device: { id: deviceId, dpk: b64(client.devicePublic()), cert: b64(client.deviceCert()) },
+      inbox: { mailbox_id: inbox.mailbox_id, token_hash: b64(await sha256(enc.encode(inbox.token))) },
+      inboxId: inbox.mailbox_id,
+      inboxKey: b64(unhex(inbox.key)),
+      keypackages: Array.from(client.keyPackages(KP_BATCH, false) as Uint8Array[]).map(b64),
+      last_resort: b64((client.keyPackages(1, true) as Uint8Array[])[0]),
+    };
+  }
+
+  private emptyState(me: AppState['me']): AppState {
+    return {
+      v: 1, me, backupDone: false, intro: null, conversations: {}, contacts: {}, mailboxes: {},
+      blockedUsers: [], blockedServers: [], allowUsers: [], allowServers: [],
+      filterMode: 'off', serverSideFilter: false, directSend: false, cursor: 0, outbox: [],
+      sendDelivered: false, sendRead: false, onceDropOwnCopy: false,
+    };
+  }
+
   async createAccount(opts: { server: string; name: string; invite: string; passphrase: string }): Promise<void> {
     const core = this.core;
     const name = opts.name.trim().toLowerCase();
@@ -97,31 +122,69 @@ export class Engine {
     if (info.registration === 'closed') throw new Error('Dieser Server nimmt keine Registrierungen an.');
     const client = new core.Client(`${name}@${domain}`);
     const ts = Math.floor(Date.now() / 1000);
-    const sig = client.sign(enc.encode(`CHAT-REGISTER-V1\n${domain}\n${name}\n${ts}`));
+    // Die Registrierung beweist den Besitz des Konto-Schlüssels (AIK).
+    const sig = client.signAccount(enc.encode(`CHAT-REGISTER-V1\n${domain}\n${name}\n${ts}`));
     const pow = await solvePow(name, ts, info.pow_bits);
-    const kps = Array.from(client.keyPackages(KP_BATCH, false) as Uint8Array[]).map(b64);
-    const last = b64((client.keyPackages(1, true) as Uint8Array[])[0]);
-    const api = new Api(domain);
-    const res = await api.register({
+    const reg = await this.deviceRegistration(client);
+    const res = await new Api(domain).register({
       invite: opts.invite.trim(), name, ik: b64(client.identityPublic()), ts, sig: b64(sig), pow,
-      keypackages: kps, last_resort: last,
+      keypackages: reg.keypackages, last_resort: reg.last_resort, device: reg.device, inbox: reg.inbox,
     });
     const introKey = b64(core.envelopeKey());
     this.client = client;
     this.info = info;
-    this.state = {
-      v: 1,
-      me: { address: `${name}@${domain}`, domain, name },
-      intro: { mailbox_id: res.intro.mailbox_id, send_token: res.intro.send_token, key: introKey },
-      conversations: {}, contacts: {}, mailboxes: { [res.intro.mailbox_id]: introKey },
-      blockedUsers: [], blockedServers: [], allowUsers: [], allowServers: [],
-      filterMode: 'off', serverSideFilter: false, directSend: false, cursor: 0, outbox: [],
-      sendDelivered: false, sendRead: false, onceDropOwnCopy: false,
-    };
+    const st = this.emptyState({ address: `${name}@${domain}`, domain, name, deviceId: reg.deviceId, inboxId: reg.inboxId });
+    st.intro = { mailbox_id: res.intro.mailbox_id, send_token: res.intro.send_token, key: introKey };
+    st.mailboxes = { [res.intro.mailbox_id]: introKey, [reg.inboxId]: reg.inboxKey };
+    this.state = st;
     this.vault = core.Vault.create(opts.passphrase);
     await this.persist();
-    await kv.put('meta', { address: this.state.me.address });
-    this.knownAddress = this.state.me.address;
+    await kv.put('meta', { address: st.me.address });
+    this.knownAddress = st.me.address;
+    await this.start();
+  }
+
+  /**
+   * Neues Gerät für ein bestehendes Konto: Backup-Datei (enthält den Konto-Schlüssel) → neuer Geräteschlüssel → Registrierung am Server.
+   * Das Gerät startet ohne Gespräche; ein bereits aktives Gerät des Kontos nimmt es in die Gruppen auf (siehe docs/MULTIDEVICE.md).
+   */
+  async linkDevice(file: Uint8Array, backupPass: string, newPass: string): Promise<void> {
+    const core = this.core;
+    let plain: Uint8Array;
+    try {
+      plain = core.vaultOpen(backupPass, file);
+    } catch {
+      throw new Error('Falsche Passphrase oder beschädigte Backup-Datei.');
+    }
+    const j = JSON.parse(dec.decode(plain)) as { v: number; address: string; aik: string; sync: Partial<AppState> };
+    if (j.v !== 2) throw new Error('Dieses Backup hat ein altes Format und kann nicht verwendet werden.');
+    const parts = splitAddress(j.address);
+    if (!parts) throw new Error('Ungültiges Backup.');
+    const { name, domain } = parts;
+    const client = core.Client.linkDevice(j.address, unb64(j.aik));
+    const info = await new Api(domain).serverInfo();
+    if (info.domain !== domain) throw new Error('Der Server meldet einen anderen Namen als im Backup.');
+    const reg = await this.deviceRegistration(client);
+    const ts = Math.floor(Date.now() / 1000);
+    const sig = client.signAccount(enc.encode(`CHAT-ADD-DEVICE-V1\n${domain}\n${name}\n${ts}\n${reg.deviceId}`));
+    await new Api(domain).addDevice({
+      name, ts, sig: b64(sig), device: reg.device, inbox: reg.inbox, keypackages: reg.keypackages, last_resort: reg.last_resort,
+    });
+    const st = this.emptyState({ address: j.address, domain, name, deviceId: reg.deviceId, inboxId: reg.inboxId });
+    const sync = j.sync ?? {};
+    for (const k of ['contacts', 'blockedUsers', 'blockedServers', 'allowUsers', 'allowServers', 'filterMode', 'serverSideFilter', 'directSend', 'sendDelivered', 'sendRead', 'onceDropOwnCopy', 'intro'] as const) {
+      if (sync[k] !== undefined) (st as unknown as Record<string, unknown>)[k] = sync[k];
+    }
+    st.backupDone = true; // das Backup existiert ja bereits
+    st.mailboxes = { [reg.inboxId]: reg.inboxKey };
+    if (st.intro) st.mailboxes[st.intro.mailbox_id] = st.intro.key;
+    this.client = client;
+    this.info = info;
+    this.state = st;
+    this.vault = core.Vault.create(newPass);
+    await this.persist();
+    await kv.put('meta', { address: st.me.address });
+    this.knownAddress = st.me.address;
     await this.start();
   }
 
@@ -143,18 +206,25 @@ export class Engine {
     this.state.onceDropOwnCopy ??= false;
   }
 
-  /** Backup als verschlüsselte Datei (Passphrase frei wählbar). */
+  /**
+   * Backup-Datei: verschlüsselt (Argon2id) mit Konto-Schlüssel (AIK), Einstellungen und Kontakten. **Kein MLS-Zustand**
+   * (deshalb kann ein Backup keinen Zustandsfork erzeugen); Verlauf und Gruppen kommen auf neuen Geräten per Aufnahme durch ein aktives Gerät.
+   */
   exportBackup(passphrase: string): Uint8Array {
-    return this.core.vaultSeal(passphrase, this.serialize());
+    const s = this.state!;
+    const sync: Partial<AppState> = {
+      contacts: s.contacts, blockedUsers: s.blockedUsers, blockedServers: s.blockedServers, allowUsers: s.allowUsers,
+      allowServers: s.allowServers, filterMode: s.filterMode, serverSideFilter: s.serverSideFilter, directSend: s.directSend,
+      sendDelivered: s.sendDelivered, sendRead: s.sendRead, onceDropOwnCopy: s.onceDropOwnCopy, intro: s.intro,
+    };
+    const json = JSON.stringify({ v: 2, address: s.me.address, aik: b64(this.client!.exportIdentity()), sync });
+    return this.core.vaultSeal(passphrase, enc.encode(json));
   }
 
-  async restoreBackup(file: Uint8Array, backupPass: string, newPass: string): Promise<void> {
-    await this.openVault(backupPass, file);
-    this.vault = this.core.Vault.create(newPass);
-    await this.persist();
-    await kv.put('meta', { address: this.state!.me.address });
-    this.knownAddress = this.state!.me.address;
-    await this.start();
+  /** Nach dem Speichern der Backup-Datei aufrufen (hebt die Pflicht nach der Registrierung auf). */
+  markBackupDone(): void {
+    this.state!.backupDone = true;
+    this.dirty();
   }
 
   private serialize(): Uint8Array {
@@ -242,8 +312,11 @@ export class Engine {
         this.online = true;
         this.emit();
         this.enqueue(() => this.catchUp());
+        this.enqueue(() => this.reconcileDevices());
         void this.retryOutbox();
         void this.replenishKeyPackages();
+      } else if (m.type === 'devices') {
+        this.enqueue(() => this.reconcileDevices());
       } else if (m.type === 'message' && m.seq && m.mailbox_id && m.data) {
         const { seq, mailbox_id, data } = m as { seq: number; mailbox_id: string; data: string };
         this.enqueue(() => this.handleRaw(seq, mailbox_id, unb64(data)));
@@ -323,14 +396,15 @@ export class Engine {
     const s = this.state!;
     const key = s.mailboxes[mailboxId];
     if (!key) return;
-    let opened: [number, Uint8Array, Uint8Array];
+    let opened: [number, Uint8Array, Uint8Array, Uint8Array];
     try {
-      opened = this.core.envelopeOpen(unb64(key), data) as [number, Uint8Array, Uint8Array];
+      opened = this.core.envelopeOpen(unb64(key), data) as [number, Uint8Array, Uint8Array, Uint8Array];
     } catch {
       return;
     }
-    const [kind, gid, payload] = opened;
-    if (kind === KIND_WELCOME) this.handleWelcome(payload);
+    const [kind, gid, dev, payload] = opened;
+    if (dec.decode(dev) === s.me.deviceId) return; // eigene Kopie (Zustellung an alle Geräte des Kontos)
+    if (kind === KIND_WELCOME) await this.handleWelcome(payload, mailboxId === s.me.inboxId);
     else if (kind === KIND_MLS) await this.handleMls(hex(gid), gid, payload);
   }
 
@@ -348,35 +422,53 @@ export class Engine {
     }
   }
 
-  private readMembers(gid: Uint8Array): { address: string; ik: string }[] {
-    return (JSON.parse(this.client!.members(gid)) as { address: string; identity: string }[]).map((m) => ({
+  /** Ein Eintrag je Gerät (MLS-Blatt). */
+  private readMembers(gid: Uint8Array): Conversation['members'] {
+    return (JSON.parse(this.client!.members(gid)) as { address: string; identity: string; device: string }[]).map((m) => ({
       address: m.address,
       ik: m.identity,
+      device: m.device,
     }));
   }
 
-  private handleWelcome(welcome: Uint8Array): void {
+  private memberAddresses(conv: Conversation): string[] {
+    return Array.from(new Set(conv.members.map((m) => m.address)));
+  }
+
+  /**
+   * `viaInbox`: das Welcome kam in der Geräte-Inbox an, also von einem anderen Gerät des eigenen Kontos
+   * (Gerät wurde hinzugefügt): kein Anfrage-Dialog, sofort aktiv.
+   */
+  private async handleWelcome(welcome: Uint8Array, viaInbox: boolean): Promise<void> {
     const s = this.state!;
     const gid = this.client!.join(welcome);
     const id = hex(gid);
     if (s.conversations[id]) return;
     const members = this.readMembers(gid);
-    const others = members.filter((m) => m.address !== s.me.address);
+    const addrs = Array.from(new Set(members.map((m) => m.address)));
+    const others = addrs.filter((a) => a !== s.me.address);
     // Blockierte oder nicht erlaubte Absender: stillschweigend verwerfen (der Absender erfährt nichts).
-    if (others.some((m) => s.blockedUsers.includes(m.address) || s.blockedServers.includes(splitAddress(m.address)?.domain ?? '')) ||
-        (s.filterMode === 'allow' && !others.some((m) => !this.isBlocked(m.address)))) {
+    if (!viaInbox && (others.some((a) => s.blockedUsers.includes(a) || s.blockedServers.includes(splitAddress(a)?.domain ?? '')) ||
+        (s.filterMode === 'allow' && !others.some((a) => !this.isBlocked(a))))) {
       this.client!.deleteGroup(gid);
       return;
     }
-    const kind = members.length === 2 ? 'dm' : 'group';
+    if (others.length === 0) { // nur eigene Geräte: kein Gespräch
+      this.client!.deleteGroup(gid);
+      return;
+    }
+    const kind = addrs.length === 2 ? 'dm' : 'group';
     const conv: Conversation = {
-      id, kind, title: kind === 'dm' ? others[0]?.address ?? '?' : 'Gruppe', status: 'request', members,
-      caps: {}, messages: [], unread: 1, disappearSeconds: 0, createdAt: Date.now(),
+      id, kind, title: kind === 'dm' ? others[0] : 'Gruppe', status: viaInbox ? 'active' : 'request', members,
+      caps: {}, messages: [], unread: viaInbox ? 0 : 1, disappearSeconds: 0, createdAt: Date.now(),
     };
-    const known = kind === 'dm' && s.contacts[others[0]?.address]?.verified;
     s.conversations[id] = conv;
     this.pinMembers(conv);
-    if (known) void this.acceptRequest(id);
+    if (viaInbox) {
+      conv.pendingAnnounce = true; // erst ankündigen, wenn wir über das Verzeichnis die Postfächer der anderen kennen
+      return;
+    }
+    if (kind === 'dm' && s.contacts[others[0]]?.verified) await this.acceptRequestLocked(id);
   }
 
   private async handleMls(id: string, gid: Uint8Array, payload: Uint8Array): Promise<void> {
@@ -384,7 +476,7 @@ export class Engine {
     const conv = s.conversations[id];
     if (!conv || conv.status === 'left') return;
     const res = JSON.parse(this.client!.process(gid, payload)) as
-      | { kind: 'application'; sender: string; envelope: Envelope }
+      | { kind: 'application'; sender: string; senderDevice: string; envelope: Envelope }
       | { kind: 'commit'; sender: string; removedSelf: boolean }
       | { kind: 'proposal' };
     if (res.kind === 'commit') {
@@ -394,16 +486,21 @@ export class Engine {
       } else {
         conv.members = this.readMembers(gid);
         this.pinMembers(conv);
-        if (conv.kind === 'group') this.rebuildCaps(conv);
+        this.rebuildCaps(conv);
       }
       return;
     }
     if (res.kind !== 'application') return;
-    // Zustand ist fortgeschrieben; blockierte Absender werden erst jetzt verworfen.
-    if (this.isBlocked(res.sender)) return;
-    this.applyContent(conv, res.sender, res.envelope);
+    // Zustand ist fortgeschrieben; blockierte Absender werden erst jetzt verworfen (eigene Geräte nie).
+    if (res.sender !== s.me.address && this.isBlocked(res.sender)) return;
+    this.applyContent(conv, res.sender, res.senderDevice, res.envelope);
     await this.flushRelays();
     await this.flushReceipts();
+    if (conv.pendingAnnounce && conv.status === 'active' && Object.keys(conv.caps).length > 0) {
+      conv.pendingAnnounce = false;
+      await this.ensureMailbox(conv);
+      await this.announce(conv);
+    }
   }
 
   private async flushReceipts(): Promise<void> {
@@ -417,7 +514,7 @@ export class Engine {
     }
   }
 
-  /** Postfach-Verzeichnis in Gruppen vervollständigen: neue Einträge verteilen, dem Neuen die bekannten schicken. */
+  /** Postfach-Verzeichnis vervollständigen: neue Selbst-Ankündigungen an die übrigen Mitglieder weiterreichen, dem Neuen die bekannten schicken. */
   private async flushRelays(): Promise<void> {
     const s = this.state!;
     const list = this.relays;
@@ -425,13 +522,20 @@ export class Engine {
     for (const { convId, entry, sender } of list) {
       const conv = s.conversations[convId];
       if (!conv || conv.status !== 'active') continue;
-      const others = conv.members.map((m) => m.address).filter((a) => a !== s.me.address && a !== sender);
+      const senderKey = `${sender}#${entry.device}`;
+      const others = conv.members
+        .filter((m) => !(m.address === s.me.address && m.device === s.me.deviceId) && `${m.address}#${m.device}` !== senderKey)
+        .map((m) => `${m.address}#${m.device}`);
       if (others.length) await this.sendContent(conv, { kind: 'directory', entries: [entry] }, others);
-      const known: CapEntry[] = Object.entries(conv.caps)
-        .filter(([a, k]) => a !== sender && !k.intro)
-        .map(([a, k]) => ({ address: a, domain: k.domain, mailbox_id: k.mailbox_id, send_token: k.send_token, key: k.key }));
-      if (known.length) await this.sendContent(conv, { kind: 'directory', entries: known }, [sender]);
+      await this.sendContent(conv, { kind: 'directory', entries: this.knownEntries(conv, senderKey) }, [senderKey]);
     }
+  }
+
+  /** Alle bekannten Geräte-Postfächer der Unterhaltung (ohne Intro-Platzhalter und ohne `exceptKey`). */
+  private knownEntries(conv: Conversation, exceptKey?: string): CapEntry[] {
+    return Object.entries(conv.caps)
+      .filter(([k, c]) => k !== exceptKey && !c.intro && c.device)
+      .map(([k, c]) => ({ address: k.split('#')[0], device: c.device!, domain: c.domain, mailbox_id: c.mailbox_id, send_token: c.send_token, key: c.key }));
   }
 
   private async sendContent(conv: Conversation, content: Content, only: string[]): Promise<void> {
@@ -440,12 +544,16 @@ export class Engine {
     await this.sendCt(conv, gid, KIND_MLS, ct, only);
   }
 
+  /** Postfächer von Geräten entfernen, die nicht mehr Mitglied sind. */
   private rebuildCaps(conv: Conversation) {
+    const leaves = new Set(conv.members.map((m) => `${m.address}#${m.device}`));
     const addrs = new Set(conv.members.map((m) => m.address));
-    for (const a of Object.keys(conv.caps)) if (!addrs.has(a)) delete conv.caps[a];
+    for (const k of Object.keys(conv.caps)) {
+      if (k.includes('#') ? !leaves.has(k) : !addrs.has(k)) delete conv.caps[k];
+    }
   }
 
-  private applyContent(conv: Conversation, sender: string, env: Envelope): void {
+  private applyContent(conv: Conversation, sender: string, senderDevice: string, env: Envelope): void {
     const s = this.state!;
     const c = env.content;
     // Absender muss aktuelles Mitglied sein (MLS garantiert das, wir prüfen zusätzlich die Adresse).
@@ -454,15 +562,18 @@ export class Engine {
       case 'message': {
         if (conv.messages.some((m) => m.id === env.id)) return;
         const once = c.once === true && conv.kind === 'dm'; // Einmal-Nachrichten gibt es nur in 1:1-Chats
+        const own = sender === s.me.address; // von einem anderen eigenen Gerät
         const msg: Msg = {
           id: env.id, from: sender, ts: Math.min(env.ts, Date.now() + 5 * 60_000), parts: c.parts,
-          status: 'received', reactions: {}, ...(once ? { once: true } : {}),
+          status: own ? 'sent' : 'received', reactions: {}, ...(once ? { once: true } : {}),
         };
         if (conv.disappearSeconds > 0) msg.expiresAt = Date.now() + conv.disappearSeconds * 1000;
         conv.messages.push(msg);
         conv.messages.sort((a, b) => a.ts - b.ts);
-        conv.unread++;
-        if (conv.kind === 'dm' && s.sendDelivered) this.receipts.push({ convId: conv.id, kind: 'delivered', ids: [env.id] });
+        if (!own) {
+          conv.unread++;
+          if (conv.kind === 'dm' && s.sendDelivered) this.receipts.push({ convId: conv.id, kind: 'delivered', ids: [env.id] });
+        }
         break;
       }
       case 'receipt': {
@@ -508,11 +619,12 @@ export class Engine {
         break;
       case 'directory':
         for (const e of c.entries) {
-          const before = conv.caps[e.address]?.mailbox_id;
-          this.mergeCap(conv, sender, e);
-          const after = conv.caps[e.address]?.mailbox_id;
-          // Neue Selbst-Ankündigung: an die übrigen Mitglieder weiterreichen (sie kennen unser Postfach evtl. noch nicht).
-          if (e.address === sender && after && after !== before && conv.status === 'active' && conv.kind === 'group') {
+          const key = `${e.address}#${e.device}`;
+          const before = conv.caps[key]?.mailbox_id;
+          this.mergeCap(conv, sender, senderDevice, e);
+          const after = conv.caps[key]?.mailbox_id;
+          // Neue Selbst-Ankündigung eines Geräts: an die übrigen Mitglieder weiterreichen (sie kennen sein Postfach evtl. noch nicht).
+          if (e.address === sender && e.device === senderDevice && after && after !== before && conv.status === 'active') {
             this.relays.push({ convId: conv.id, entry: e, sender });
           }
         }
@@ -520,14 +632,16 @@ export class Engine {
     }
   }
 
-  /** Caps nur vom Besitzer selbst überschreibbar; für andere gilt „first write wins“ (kein Umleiten durch Dritte). */
-  private mergeCap(conv: Conversation, sender: string, e: CapEntry): void {
-    if (!splitAddress(e.address) || !e.domain || !e.mailbox_id || !e.send_token || !e.key) return;
-    const cur = conv.caps[e.address];
-    if (e.address === sender || !cur || cur.intro) {
-      if (e.address !== sender && !conv.members.some((m) => m.address === e.address)) return;
-      conv.caps[e.address] = { domain: e.domain, mailbox_id: e.mailbox_id, send_token: e.send_token, key: e.key };
-    }
+  /** Ein Gerät darf nur sein eigenes Postfach überschreiben; für andere Geräte gilt „first write wins“ (kein Umleiten durch Dritte). */
+  private mergeCap(conv: Conversation, sender: string, senderDevice: string, e: CapEntry): void {
+    const s = this.state!;
+    if (!splitAddress(e.address) || !e.device || !e.domain || !e.mailbox_id || !e.send_token || !e.key) return;
+    if (e.address === s.me.address && e.device === s.me.deviceId) return; // wir selbst
+    const key = `${e.address}#${e.device}`;
+    const isSelf = e.address === sender && e.device === senderDevice;
+    if (!isSelf && conv.caps[key]) return;
+    if (!isSelf && !conv.members.some((m) => m.address === e.address && m.device === e.device)) return;
+    conv.caps[key] = { domain: e.domain, mailbox_id: e.mailbox_id, send_token: e.send_token, key: e.key, device: e.device };
   }
 
   // ---------- Ausgehend ----------
@@ -579,22 +693,46 @@ export class Engine {
     return this.sendCt(conv, gid, KIND_MLS, ct);
   }
 
+  /**
+   * Postfächer für den Versand: je Mitglieds-Gerät das angekündigte Postfach; kennen wir von einem Konto noch kein Geräte-Postfach,
+   * dient das Intro-Postfach (kontoweit) als Ersatz. `only`: Einträge `adresse` (alle Geräte) oder `adresse#gerät`.
+   */
+  private capsForSend(conv: Conversation, only?: string[]): Cap[] {
+    const s = this.state!;
+    const out: Cap[] = [];
+    for (const addr of this.memberAddresses(conv)) {
+      const leaves = conv.members.filter((m) => m.address === addr && !(addr === s.me.address && m.device === s.me.deviceId));
+      if (leaves.length === 0) continue;
+      const caps: Cap[] = [];
+      for (const l of leaves) {
+        const key = `${addr}#${l.device}`;
+        if (only && !only.includes(addr) && !only.includes(key)) continue;
+        const c = conv.caps[key];
+        if (c) caps.push(c);
+      }
+      if (caps.length === 0 && addr !== s.me.address && (!only || only.includes(addr))) {
+        const fallback = conv.caps[addr];
+        if (fallback) caps.push(fallback);
+      }
+      out.push(...caps);
+    }
+    return out;
+  }
+
   private async sendCt(conv: Conversation, gid: Uint8Array, kind: number, ct: Uint8Array, only?: string[]): Promise<number> {
-    const me = this.state!.me.address;
+    const dev = enc.encode(this.state!.me.deviceId);
     let sent = 0;
-    for (const m of conv.members) {
-      if (m.address === me || (only && !only.includes(m.address))) continue;
-      const cap = conv.caps[m.address];
-      if (!cap) continue;
-      const blob = this.core.envelopeSeal(unb64(cap.key), kind, gid, ct);
+    for (const cap of this.capsForSend(conv, only)) {
+      const blob = this.core.envelopeSeal(unb64(cap.key), kind, gid, dev, ct);
       await this.deliver(cap, blob);
       sent++;
     }
     return sent;
   }
 
-  private async newMailbox(): Promise<{ id: string; key: string; token: string }> {
-    const r = await this.api!.call<{ mailbox_id: string; send_token: string }>('POST', '/v1/mailboxes');
+  /** `account`: kontoweit (Zustellung an alle Geräte), sonst nur für dieses Gerät. */
+  private async newMailbox(account = false): Promise<{ id: string; key: string; token: string }> {
+    const r = await this.api!.call<{ mailbox_id: string; send_token: string }>('POST', '/v1/mailboxes', account ? { scope: 'account' } : undefined);
     const key = b64(this.core.envelopeKey());
     this.state!.mailboxes[r.mailbox_id] = key;
     return { id: r.mailbox_id, key, token: r.send_token };
@@ -613,7 +751,7 @@ export class Engine {
     if (!conv.myMailbox) await this.ensureMailbox(conv);
     const mb = conv.myMailbox!;
     const me: CapEntry = {
-      address: s.me.address, domain: s.me.domain, mailbox_id: mb.id, send_token: mb.token, key: mb.key,
+      address: s.me.address, device: s.me.deviceId, domain: s.me.domain, mailbox_id: mb.id, send_token: mb.token, key: mb.key,
     };
     const env = this.newEnvelope({ kind: 'directory', entries: [me, ...extra] });
     const gid = unhex(conv.id);
@@ -645,7 +783,7 @@ export class Engine {
       delete s.mailboxes[s.intro.mailbox_id];
       s.intro = null;
     } else if (on && !s.intro) {
-      const mb = await this.newMailbox();
+      const mb = await this.newMailbox(true);
       s.intro = { mailbox_id: mb.id, send_token: mb.token, key: mb.key };
     }
     this.dirty();
@@ -659,12 +797,13 @@ export class Engine {
     if (s.blockedUsers.includes(addr)) throw new Error('Dieser Nutzer ist blockiert.');
     const existing = Object.values(s.conversations).find((c) => c.kind === 'dm' && c.members.some((m) => m.address === addr) && c.status !== 'left');
     if (existing) return existing.id;
-    const { kp, ik } = await this.fetchKeyPackage(addr);
+    const { kps, ik } = await this.fetchKeyPackages(addr);
     const contact = (s.contacts[addr] ??= { address: addr, ik, verified: false });
-    if (contact.ik !== ik) throw new Error('Der Schlüssel dieses Kontakts hat sich geändert. Bitte neu verifizieren.');
+    if (contact.ik !== ik) throw new Error('Der Schlüssel dieses Kontos hat sich geändert. Bitte neu verifizieren.');
     contact.intro = card.cap;
     const gid = this.client!.createGroup();
-    const [, welcome] = this.client!.addMembers(gid, [kp]) as Uint8Array[];
+    // Alle Geräte des Kontakts werden aufgenommen; das Welcome geht an das kontoweite Intro-Postfach (alle Geräte erhalten es).
+    const [, welcome] = this.client!.addMembers(gid, kps.map((k) => k.kp)) as Uint8Array[];
     const id = hex(gid);
     const conv: Conversation = {
       id, kind: 'dm', title: addr, status: 'active', members: this.readMembers(gid),
@@ -673,28 +812,46 @@ export class Engine {
     s.conversations[id] = conv;
     await this.ensureMailbox(conv);
     await this.flush();
-    await this.deliver(card.cap, this.core.envelopeSeal(unb64(card.cap.key), KIND_WELCOME, new Uint8Array(), welcome));
+    await this.deliver(card.cap, this.core.envelopeSeal(unb64(card.cap.key), KIND_WELCOME, new Uint8Array(), enc.encode(s.me.deviceId), welcome));
     await this.announce(conv);
     this.dirty();
     return id;
   }
 
-  private async fetchKeyPackage(addr: string): Promise<{ kp: Uint8Array; ik: string }> {
-    const r = await this.api!.call<{ keypackage: string; ik: string }>('GET', `/v1/resolve/${encodeURIComponent(addr)}/keypackage`);
-    const kp = unb64(r.keypackage);
-    const id = JSON.parse(this.client!.keyPackageIdentity(kp)) as { address: string; identity: string };
-    if (id.address !== addr) throw new Error('Der Server hat ein KeyPackage für eine andere Adresse geliefert.');
-    if (id.identity !== hex(unb64(r.ik))) throw new Error('Schlüssel stimmt nicht überein (möglicher Manipulationsversuch).');
-    return { kp, ik: id.identity };
+  /** KeyPackages aller (oder der genannten) Geräte eines Kontos; prüft Adresse, Konto-Schlüssel und Gerätezertifikat. */
+  private async fetchKeyPackages(addr: string, devices?: string[]): Promise<{ kps: { device: string; kp: Uint8Array }[]; ik: string }> {
+    const q = devices?.length ? '?' + devices.map((d) => `device=${d}`).join('&') : '';
+    const r = await this.api!.call<{ ik: string; devices: { device: string; keypackage: string }[] }>(
+      'GET', `/v1/resolve/${encodeURIComponent(addr)}/keypackages${q}`);
+    const ik = hex(unb64(r.ik));
+    const kps = r.devices.map((d) => {
+      const kp = unb64(d.keypackage);
+      let id: { address: string; identity: string; device: string };
+      try {
+        id = JSON.parse(this.client!.keyPackageIdentity(kp));
+      } catch {
+        throw new Error('Ungültiges Gerätezertifikat (möglicher Manipulationsversuch).');
+      }
+      if (id.address !== addr) throw new Error('Der Server hat ein KeyPackage für eine andere Adresse geliefert.');
+      if (id.identity !== ik) throw new Error('Schlüssel stimmt nicht überein (möglicher Manipulationsversuch).');
+      if (id.device !== d.device) throw new Error('Gerätekennung stimmt nicht überein.');
+      return { device: d.device, kp };
+    });
+    if (kps.length === 0) throw new Error('Kein Gerät dieses Kontos ist erreichbar.');
+    return { kps, ik };
   }
 
-  async acceptRequest(id: string): Promise<void> {
+  private async acceptRequestLocked(id: string): Promise<void> {
     const conv = this.state!.conversations[id];
     if (!conv || conv.status !== 'request') return;
     conv.status = 'active';
     await this.ensureMailbox(conv);
     await this.announce(conv);
     this.dirty();
+  }
+
+  async acceptRequest(id: string): Promise<void> {
+    await this.acceptRequestLocked(id);
   }
 
   async declineRequest(id: string): Promise<void> {
@@ -705,6 +862,32 @@ export class Engine {
     this.dirty();
   }
 
+  /** Bekannte Postfächer eines Kontos: Geräte-Postfächer aus aktiven 1:1-Chats, sonst das Intro-Postfach. */
+  private knownCaps(addr: string): Record<string, Cap> {
+    const s = this.state!;
+    const out: Record<string, Cap> = {};
+    for (const c of Object.values(s.conversations)) {
+      if (c.kind !== 'dm' || c.status !== 'active') continue;
+      for (const [k, cap] of Object.entries(c.caps)) if (k.startsWith(addr + '#') && !cap.intro) out[k] = cap;
+    }
+    if (Object.keys(out).length === 0) {
+      const intro = s.contacts[addr]?.intro ?? Object.values(s.conversations).map((c) => c.caps[addr]).find(Boolean);
+      if (intro) out[addr] = intro;
+    }
+    return out;
+  }
+
+  /** Welcome an alle Geräte eines Mitglieds: Geräte-Postfächer plus (falls nicht jedes Gerät eines hat) das kontoweite Intro-Postfach. */
+  private async sendWelcomeTo(conv: Conversation, gid: Uint8Array, welcome: Uint8Array, addr: string): Promise<void> {
+    const s = this.state!;
+    const dev = enc.encode(s.me.deviceId);
+    const leaves = conv.members.filter((m) => m.address === addr);
+    const caps: Cap[] = leaves.map((l) => conv.caps[`${addr}#${l.device}`]).filter((c): c is Cap => !!c);
+    const intro = s.contacts[addr]?.intro ?? conv.caps[addr];
+    if (intro && (caps.length < leaves.length || caps.length === 0)) caps.push(intro);
+    for (const cap of caps) await this.deliver(cap, this.core.envelopeSeal(unb64(cap.key), KIND_WELCOME, gid, dev, welcome));
+  }
+
   /** Gruppe mit bekannten Kontakten anlegen. */
   async createGroup(title: string, addresses: string[]): Promise<string> {
     const s = this.state!;
@@ -712,13 +895,13 @@ export class Engine {
     const kps: Uint8Array[] = [];
     const caps: Record<string, Cap> = {};
     for (const a of addresses) {
-      const cap = this.knownCap(a);
-      if (!cap) throw new Error(`${a} ist kein bekannter Kontakt.`);
-      const { kp, ik } = await this.fetchKeyPackage(a);
-      const c = (s.contacts[a] ??= { address: a, ik, verified: false });
-      if (c.ik !== ik) throw new Error(`Schlüssel von ${a} hat sich geändert.`);
-      kps.push(kp);
-      caps[a] = cap;
+      const known = this.knownCaps(a);
+      if (Object.keys(known).length === 0) throw new Error(`${a} ist kein bekannter Kontakt.`);
+      const r = await this.fetchKeyPackages(a);
+      const c = (s.contacts[a] ??= { address: a, ik: r.ik, verified: false });
+      if (c.ik !== r.ik) throw new Error(`Schlüssel von ${a} hat sich geändert.`);
+      kps.push(...r.kps.map((k) => k.kp));
+      Object.assign(caps, known);
     }
     const gid = this.client!.createGroup();
     const [, welcome] = this.client!.addMembers(gid, kps) as Uint8Array[];
@@ -730,19 +913,11 @@ export class Engine {
     s.conversations[id] = conv;
     await this.ensureMailbox(conv);
     await this.flush();
-    await this.sendCt(conv, gid, KIND_WELCOME, welcome);
+    for (const a of addresses) await this.sendWelcomeTo(conv, gid, welcome, a);
     await this.announce(conv);
     await this.broadcast(conv, this.newEnvelope({ kind: 'group_name', name: conv.title }));
     this.dirty();
     return id;
-  }
-
-  private knownCap(addr: string): Cap | undefined {
-    const s = this.state!;
-    for (const c of Object.values(s.conversations)) {
-      if (c.kind === 'dm' && c.status === 'active' && c.caps[addr] && !c.caps[addr].intro) return c.caps[addr];
-    }
-    return s.contacts[addr]?.intro ?? Object.values(s.conversations).map((c) => c.caps[addr]).find(Boolean);
   }
 
   async addMember(id: string, address: string): Promise<void> {
@@ -750,23 +925,20 @@ export class Engine {
     const conv = s.conversations[id];
     if (!conv || conv.kind !== 'group') throw new Error('Keine Gruppe.');
     if (conv.members.some((m) => m.address === address)) throw new Error('Bereits Mitglied.');
-    const cap = this.knownCap(address);
-    if (!cap) throw new Error(`${address} ist kein bekannter Kontakt.`);
-    const { kp, ik } = await this.fetchKeyPackage(address);
-    const c = (s.contacts[address] ??= { address, ik, verified: false });
-    if (c.ik !== ik) throw new Error('Schlüssel hat sich geändert.');
+    const known = this.knownCaps(address);
+    if (Object.keys(known).length === 0) throw new Error(`${address} ist kein bekannter Kontakt.`);
+    const r = await this.fetchKeyPackages(address);
+    const c = (s.contacts[address] ??= { address, ik: r.ik, verified: false });
+    if (c.ik !== r.ik) throw new Error('Schlüssel hat sich geändert.');
     const gid = unhex(id);
-    const [commit, welcome] = this.client!.addMembers(gid, [kp]) as Uint8Array[];
-    const others = conv.members.filter((m) => m.address !== s.me.address).map((m) => m.address);
+    const before = this.memberAddresses(conv);
+    const [commit, welcome] = this.client!.addMembers(gid, r.kps.map((k) => k.kp)) as Uint8Array[];
     conv.members = this.readMembers(gid);
-    // Commit an bisherige Mitglieder, Welcome + Verzeichnis an das neue Mitglied.
-    await this.sendCt(conv, gid, KIND_MLS, commit, others);
-    conv.caps[address] = cap;
-    await this.sendCt(conv, gid, KIND_WELCOME, welcome, [address]);
-    const dir: CapEntry[] = Object.entries(conv.caps)
-      .filter(([a]) => a !== address)
-      .map(([a, k]) => ({ address: a, ...k }));
-    await this.announce(conv, dir, [address]);
+    // Commit an bisherige Mitglieder, Welcome + Verzeichnis an das neue.
+    await this.sendCt(conv, gid, KIND_MLS, commit, before);
+    Object.assign(conv.caps, known);
+    await this.sendWelcomeTo(conv, gid, welcome, address);
+    await this.announce(conv, this.knownEntries(conv), [address]);
     await this.broadcast(conv, this.newEnvelope({ kind: 'group_name', name: conv.title }));
     this.dirty();
   }
@@ -777,10 +949,98 @@ export class Engine {
     if (!conv || conv.kind !== 'group') return;
     const gid = unhex(id);
     const commit = this.client!.removeMembers(gid, [address]);
-    const targets = conv.members.map((m) => m.address).filter((a) => a !== s.me.address);
-    await this.sendCt(conv, gid, KIND_MLS, commit, targets);
+    // Auch an die entfernten Geräte senden (sie erfahren so von der Entfernung); erst danach Mitglieder/Postfächer aktualisieren.
+    await this.sendCt(conv, gid, KIND_MLS, commit);
     conv.members = this.readMembers(gid);
-    delete conv.caps[address];
+    this.rebuildCaps(conv);
+    void s;
+    this.dirty();
+  }
+
+  // ---------- Geräte (Multi-Device) ----------
+
+  async listDevices(): Promise<DeviceInfo[]> {
+    return this.api!.call<DeviceInfo[]>('GET', '/v1/devices');
+  }
+
+  /** Gerät widerrufen: es verliert Anmeldung und Postfach; ein aktives Gerät entfernt es aus allen Gruppen. */
+  async revokeDevice(id: string): Promise<void> {
+    await this.api!.call('DELETE', `/v1/devices/${id}`);
+    this.enqueue(() => this.reconcileDevices());
+  }
+
+  private inboxCap(deviceId: string): Cap {
+    const s = this.state!;
+    const i = JSON.parse(this.client!.deviceInbox(deviceId)) as { mailbox_id: string; token: string; key: string };
+    return { domain: s.me.domain, mailbox_id: i.mailbox_id, send_token: i.token, key: b64(unhex(i.key)), device: deviceId };
+  }
+
+  /**
+   * Abgleich der Geräte des eigenen Kontos mit den Blättern in jeder Gruppe: Das Gerät mit der kleinsten ID unter den bereits
+   * beteiligten nimmt neue Geräte auf und entfernt widerrufene (siehe docs/MULTIDEVICE.md).
+   */
+  private async reconcileDevices(): Promise<void> {
+    const s = this.state;
+    if (!s || !this.api || this.reconciling) return;
+    this.reconciling = true;
+    try {
+      const devs = await this.listDevices();
+      const active = new Set(devs.map((d) => d.id));
+      for (const conv of Object.values(s.conversations)) {
+        if (conv.status !== 'active') continue;
+        const own = conv.members.filter((m) => m.address === s.me.address);
+        const present = own.filter((m) => active.has(m.device)).map((m) => m.device).sort();
+        if (present[0] !== s.me.deviceId) continue; // nicht unser Zug
+        const stale = own.filter((m) => !active.has(m.device)).map((m) => m.device);
+        const missing = devs.map((d) => d.id).filter((id) => !own.some((m) => m.device === id));
+        try {
+          if (stale.length) await this.removeOwnDevices(conv, stale);
+          if (missing.length) await this.addOwnDevices(conv, missing);
+        } catch (e) {
+          console.warn('reconcile', conv.id, e);
+        }
+      }
+      await this.flush();
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  private async removeOwnDevices(conv: Conversation, stale: string[]): Promise<void> {
+    const s = this.state!;
+    const gid = unhex(conv.id);
+    const commit = this.client!.removeDevices(gid, JSON.stringify(stale.map((device) => ({ address: s.me.address, device }))));
+    conv.members = this.readMembers(gid);
+    this.rebuildCaps(conv);
+    await this.sendCt(conv, gid, KIND_MLS, commit);
+    this.dirty();
+  }
+
+  private async addOwnDevices(conv: Conversation, deviceIds: string[]): Promise<void> {
+    const s = this.state!;
+    const { kps, ik } = await this.fetchKeyPackages(s.me.address, deviceIds);
+    if (ik !== hex(this.client!.identityPublic())) throw new Error('Konto-Schlüssel stimmt nicht überein.');
+    const gid = unhex(conv.id);
+    const [commit, welcome] = this.client!.addMembers(gid, kps.map((k) => k.kp)) as Uint8Array[];
+    conv.members = this.readMembers(gid);
+    await this.ensureMailbox(conv);
+    await this.sendCt(conv, gid, KIND_MLS, commit); // an alle Geräte mit bekanntem Postfach (die neuen noch nicht)
+    const me = enc.encode(s.me.deviceId);
+    const mb = conv.myMailbox!;
+    const own: CapEntry = { address: s.me.address, device: s.me.deviceId, domain: s.me.domain, mailbox_id: mb.id, send_token: mb.token, key: mb.key };
+    const entries = [own, ...this.knownEntries(conv)];
+    for (const { device } of kps) {
+      // Welcome und Verzeichnis gehen an die Geräte-Inbox (aus dem Konto-Schlüssel abgeleitet, der Server sieht keine Geheimnisse).
+      const cap = this.inboxCap(device);
+      const key = unb64(cap.key);
+      await this.deliver(cap, this.core.envelopeSeal(key, KIND_WELCOME, new Uint8Array(), me, welcome));
+      const send = async (content: Content) => {
+        const ct = this.client!.encryptEnvelope(gid, JSON.stringify(this.newEnvelope(content)));
+        await this.deliver(cap, this.core.envelopeSeal(key, KIND_MLS, gid, me, ct));
+      };
+      await send({ kind: 'directory', entries });
+      if (conv.kind === 'group') await send({ kind: 'group_name', name: conv.title });
+    }
     this.dirty();
   }
 
@@ -892,8 +1152,9 @@ export class Engine {
     const conv = this.state!.conversations[id];
     const m = conv?.messages.find((x) => x.id === ref);
     if (!conv || !m) return;
-    this.applyContent(conv, this.state!.me.address, this.newEnvelope({ kind: 'reaction', reference: ref, emoji }));
-    await this.broadcast(conv, this.newEnvelope({ kind: 'reaction', reference: ref, emoji }));
+    const env = this.newEnvelope({ kind: 'reaction', reference: ref, emoji });
+    this.applyContent(conv, this.state!.me.address, this.state!.me.deviceId, env);
+    await this.broadcast(conv, env);
     this.dirty();
   }
 
@@ -1107,3 +1368,8 @@ export function snippetOf(m: Msg): string {
 }
 
 export type { Contact };
+
+/** Adressen der Mitglieder (ein Konto kann mehrere Geräte/Blätter haben). */
+export function memberAddresses(conv: Conversation): string[] {
+  return Array.from(new Set(conv.members.map((m) => m.address)));
+}

@@ -19,14 +19,17 @@ pub fn random_key() -> [u8; 32] {
     k
 }
 
-pub fn seal(key: &[u8], kind: u8, gid: &[u8], payload: &[u8]) -> Result<Vec<u8>> {
-    if key.len() != 32 || gid.len() > u16::MAX as usize {
+/// `dev`: Geräte-ID des Absenders (damit ein Gerät seine eigene Kopie erkennt, wenn der Server an alle Geräte des Kontos zustellt).
+pub fn seal(key: &[u8], kind: u8, gid: &[u8], dev: &[u8], payload: &[u8]) -> Result<Vec<u8>> {
+    if key.len() != 32 || gid.len() > u16::MAX as usize || dev.len() > 32 {
         return Err(Error::Invalid("envelope params"));
     }
-    let mut inner = Vec::with_capacity(3 + gid.len() + payload.len());
+    let mut inner = Vec::with_capacity(4 + gid.len() + dev.len() + payload.len());
     inner.push(kind);
     inner.extend_from_slice(&(gid.len() as u16).to_be_bytes());
     inner.extend_from_slice(gid);
+    inner.push(dev.len() as u8);
+    inner.extend_from_slice(dev);
     inner.extend_from_slice(payload);
     let mut nonce = [0u8; NONCE];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
@@ -38,8 +41,8 @@ pub fn seal(key: &[u8], kind: u8, gid: &[u8], payload: &[u8]) -> Result<Vec<u8>>
     Ok(out)
 }
 
-/// Liefert `(kind, group_id, payload)`.
-pub fn open(key: &[u8], blob: &[u8]) -> Result<(u8, Vec<u8>, Vec<u8>)> {
+/// Liefert `(kind, group_id, sender_device, payload)`.
+pub fn open(key: &[u8], blob: &[u8]) -> Result<(u8, Vec<u8>, Vec<u8>, Vec<u8>)> {
     if key.len() != 32 || blob.len() < NONCE + 16 {
         return Err(Error::Invalid("envelope"));
     }
@@ -52,7 +55,9 @@ pub fn open(key: &[u8], blob: &[u8]) -> Result<(u8, Vec<u8>, Vec<u8>)> {
     }
     let n = u16::from_be_bytes([inner[1], inner[2]]) as usize;
     let gid = inner.get(3..3 + n).ok_or(Error::Invalid("envelope"))?;
-    Ok((inner[0], gid.to_vec(), inner[3 + n..].to_vec()))
+    let dl = *inner.get(3 + n).ok_or(Error::Invalid("envelope"))? as usize;
+    let dev = inner.get(4 + n..4 + n + dl).ok_or(Error::Invalid("envelope"))?;
+    Ok((inner[0], gid.to_vec(), dev.to_vec(), inner[4 + n + dl..].to_vec()))
 }
 
 #[cfg(test)]
@@ -61,11 +66,11 @@ mod tests {
     #[test]
     fn roundtrip_and_uniform_size() {
         let k = random_key();
-        let a = seal(&k, KIND_MLS, b"gid", b"short").unwrap();
-        let b = seal(&k, KIND_MLS, b"gid", b"a bit longer payload").unwrap();
+        let a = seal(&k, KIND_MLS, b"gid", b"dev1", b"short").unwrap();
+        let b = seal(&k, KIND_MLS, b"gid", b"dev1", b"a bit longer payload").unwrap();
         assert_eq!(a.len(), b.len());
-        let (kind, gid, p) = open(&k, &a).unwrap();
-        assert_eq!((kind, gid.as_slice(), p.as_slice()), (KIND_MLS, &b"gid"[..], &b"short"[..]));
+        let (kind, gid, dev, p) = open(&k, &a).unwrap();
+        assert_eq!((kind, gid.as_slice(), dev.as_slice(), p.as_slice()), (KIND_MLS, &b"gid"[..], &b"dev1"[..], &b"short"[..]));
         assert!(open(&random_key(), &a).is_err());
         let mut t = a.clone();
         t[30] ^= 1;

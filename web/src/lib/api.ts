@@ -27,6 +27,8 @@ async function doFetch(url: string, init?: RequestInit): Promise<Response> {
 
 export interface Signer {
   name: string;
+  /** Geräte-ID (Anfragen werden mit dem Geräteschlüssel signiert). */
+  deviceId: string;
   sign(data: Uint8Array): Uint8Array;
 }
 
@@ -38,7 +40,7 @@ export class Api {
   }
 
   static fromClient(domain: string, name: string, c: Client): Api {
-    return new Api(domain, { name, sign: (d) => c.sign(d) });
+    return new Api(domain, { name, deviceId: c.deviceId(), sign: (d) => c.sign(d) });
   }
 
   private async authHeader(method: string, uri: string, bodyHash: string): Promise<string> {
@@ -47,7 +49,7 @@ export class Api {
     const nonce = b64(randomBytes(12));
     const msg = `CHAT-REQ-V1\n${this.domain}\n${method}\n${uri}\n${ts}\n${nonce}\n${bodyHash}`;
     const sig = b64(this.signer.sign(enc.encode(msg)));
-    return `Chat-Sig name=${this.signer.name},ts=${ts},nonce=${nonce},sig=${sig}`;
+    return `Chat-Sig name=${this.signer.name},dev=${this.signer.deviceId},ts=${ts},nonce=${nonce},sig=${sig}`;
   }
 
   /** WebSocket-Auth-Nachricht (Body-Hash "WS"). */
@@ -118,6 +120,18 @@ export class Api {
       credentials: 'omit',
     });
     return this.parse(res, [201]);
+  }
+
+  /** Neues Gerät eines bestehenden Kontos (beglaubigt vom Konto-Schlüssel, keine Anmeldung nötig). */
+  async addDevice(req: object): Promise<void> {
+    const res = await doFetch(this.base + '/v1/devices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+      referrerPolicy: 'no-referrer',
+      credentials: 'omit',
+    });
+    await this.parse(res, [201]);
   }
 
   /** Datei (Chiffretext) hochladen. Der Body ist nicht Teil der Signatur (UNSIGNED); er ist E2E-authentifiziert. */

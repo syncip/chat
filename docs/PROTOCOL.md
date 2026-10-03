@@ -134,7 +134,17 @@ Der Server kennt sie nicht.
 - Ein gemeinsamer Krypto-Kern (`core`, Rust) wird als WASM (Web), UniFFI (Android/iOS) und nativ (Desktop) eingebunden.
 - `GET /v1/server-info` enthält den Hash des ausgelieferten Web-Bundles, damit native Clients/Add-ons ihn prüfen können.
 
-## 11. Umsetzung: Abweichungen, Ergänzungen, Offenes
+## 11. Multi-Device (umgesetzt)
+Siehe [MULTIDEVICE.md](MULTIDEVICE.md): Konto-Schlüssel (AIK) beglaubigt je Gerät einen eigenen MLS-Schlüssel (DSK); API-Anfragen tragen `dev=<geräte-id>`
+und sind mit dem DSK signiert. Neue/geänderte Endpunkte: `POST /v1/devices`, `GET /v1/devices`, `DELETE /v1/devices/{id}`,
+`GET /v1/users/{name}/keypackages[?device=…]` (ein KeyPackage je Gerät), `POST /v1/mailboxes` (Postfach des anfragenden Geräts; `{"scope":"account"}` kontoweit).
+WebSocket-Ereignis `{"type":"devices"}` bei Änderungen der Geräteliste. Das Backup-Format v2 enthält keinen MLS-Zustand.
+
+## 12. Weitere Nachrichtenfunktionen (umgesetzt)
+`Content.receipt` (`delivered`/`read`, nur 1:1, pro Nutzer abschaltbar, standardmäßig aus, gegenseitig), `Content.message.once` (Einmal-Nachricht, nur 1:1),
+einklappbare Codeblöcke (Darstellung). Verzeichnis-Einträge (`directory`) tragen jetzt das Gerät (`device`).
+
+## 13. Umsetzung: Abweichungen, Ergänzungen, Offenes
 
 ### Authentifizierung (implementiert)
 `Authorization: Chat-Sig name=<n>,ts=<unix>,nonce=<b64>,sig=<b64>`; signiert wird
@@ -175,7 +185,7 @@ Ohne TLS ist der ausgelieferte Web-Client manipulierbar (siehe THREAT_MODEL); de
 (das in unsicheren Kontexten fehlt) und warnt in der Oberfläche. IPv6-Literale sind nicht unterstützt.
 
 ### Offen / bekannte Einschränkungen
-- **Multi-Device** (Abschnitt 9): noch nicht umgesetzt (1 Gerät pro Konto, Backup-Datei).
+- **Multi-Device:** umgesetzt (siehe Abschnitt 11). Einstellungen/Kontakte werden nicht laufend zwischen Geräten synchronisiert (nur per Backup-Schnappschuss).
 - **Key Transparency** und **Post-Quanten-Ciphersuite**: nicht umgesetzt (Roadmap). Bis dahin: Safety Numbers vergleichen.
 - **Lokale Schlüssel im Browser** liegen im IndexedDB verschlüsselt (Argon2id + XChaCha20-Poly1305), im Speicher aber entschlüsselt, solange die App entsperrt ist.
 - **Gruppen:** jedes Mitglied darf Mitglieder hinzufügen/entfernen (kein Admin-Konzept); „Verlassen“ ist rein lokal.

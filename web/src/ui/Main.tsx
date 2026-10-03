@@ -4,6 +4,7 @@ import { isInsecureTransport } from '../lib/util';
 import { useEngine } from './hooks';
 import { ChatView } from './ChatView';
 import { Settings } from './Settings';
+import { BackupGate } from './BackupGate';
 import { Dialog } from './Dialog';
 import { StartChat, NewGroup } from './Dialogs';
 
@@ -85,6 +86,7 @@ export function Main() {
           <div className="center muted">Wähle einen Chat oder starte einen neuen.</div>
         )}
       </main>
+      {!s.backupDone && <BackupGate />}
       {panel === 'settings' && <Settings onClose={() => setPanel(null)} />}
       {panel === 'new' && <StartChat onClose={() => setPanel(null)} onStarted={(id) => { setPanel(null); setActive(id); }} />}
       {panel === 'group' && <NewGroup onClose={() => setPanel(null)} onCreated={(id) => { setPanel(null); setActive(id); }} />}

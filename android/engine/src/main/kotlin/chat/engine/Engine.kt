@@ -103,6 +103,30 @@ class Engine(
 
     fun knownAddress(): String? = knownAddress
 
+    /** Geräte-Registrierung: Zertifikat des Konto-Schlüssels, Geräte-Inbox (aus dem AIK abgeleitet), KeyPackages. */
+    private class DeviceReg(
+        val deviceId: String, val device: JsonObject, val inbox: JsonObject, val inboxId: String, val inboxKey: String,
+        val keypackages: List<String>, val lastResort: String,
+    )
+
+    private fun deviceRegistration(c: MlsClient): DeviceReg {
+        val deviceId = c.deviceId()
+        val inbox = ChatJson.parseToJsonElement(c.deviceInbox(deviceId)).jsonObject
+        val token = inbox["token"]!!.jsonPrimitive.content
+        val mb = inbox["mailbox_id"]!!.jsonPrimitive.content
+        return DeviceReg(
+            deviceId = deviceId,
+            device = buildJsonObject {
+                put("id", deviceId); put("dpk", c.devicePublic().b64()); put("cert", c.deviceCert().b64())
+            },
+            inbox = buildJsonObject { put("mailbox_id", mb); put("token_hash", sha256Bytes(token.toByteArray()).b64()) },
+            inboxId = mb,
+            inboxKey = inbox["key"]!!.jsonPrimitive.content.unhex().b64(),
+            keypackages = c.keyPackages(KP_BATCH.toUInt(), false).map { it.b64() },
+            lastResort = c.keyPackages(1u, true)[0].b64(),
+        )
+    }
+
     suspend fun createAccount(server: String, name0: String, invite: String, passphrase: String) = op {
         val name = name0.trim().lowercase()
         val info = Api(server.trim().lowercase(), null, http).serverInfo()
@@ -110,31 +134,86 @@ class Engine(
         if (info.registration == "closed") throw ChatException("Dieser Server nimmt keine Registrierungen an.")
         val c = MlsClient.create("$name@$domain")
         val ts = clock() / 1000
-        val sig = c.sign("CHAT-REGISTER-V1\n$domain\n$name\n$ts".toByteArray()).b64()
+        // Die Registrierung beweist den Besitz des Konto-Schlüssels (AIK).
+        val sig = c.signAccount("CHAT-REGISTER-V1\n$domain\n$name\n$ts".toByteArray()).b64()
         val pow = solvePow(name, ts, info.pow_bits)
-        val kps = c.keyPackages(KP_BATCH.toUInt(), false).map { it.b64() }
-        val last = c.keyPackages(1u, true)[0].b64()
-        val reg = Api(domain, null, http).register(
+        val reg = deviceRegistration(c)
+        val res = Api(domain, null, http).register(
             buildJsonObject {
                 put("invite", invite.trim()); put("name", name); put("ik", c.identityPublic().b64())
                 put("ts", ts); put("sig", sig); put("pow", pow)
-                put("keypackages", JsonArray(kps.map { JsonPrimitive(it) })); put("last_resort", last)
+                put("keypackages", JsonArray(reg.keypackages.map { JsonPrimitive(it) })); put("last_resort", reg.lastResort)
+                put("device", reg.device); put("inbox", reg.inbox)
             }.toString(),
         )
-        val intro = ChatJson.parseToJsonElement(reg).jsonObject["intro"]!!.jsonObject
+        val intro = ChatJson.parseToJsonElement(res).jsonObject["intro"]!!.jsonObject
         val introKey = uniffi.chat_core.envelopeKey().b64()
         val mb = intro["mailbox_id"]!!.jsonPrimitive.content
         client = c
         this.info = info
         state = AppState(
-            me = Me("$name@$domain", domain, name),
+            me = Me("$name@$domain", domain, name, reg.deviceId, reg.inboxId),
             intro = IntroBox(mb, intro["send_token"]!!.jsonPrimitive.content, introKey),
-            mailboxes = mutableMapOf(mb to introKey),
+            mailboxes = mutableMapOf(mb to introKey, reg.inboxId to reg.inboxKey),
         )
         vault = VaultSession.create(passphrase)
         persist()
         store.write("meta", "$name@$domain".toByteArray())
         knownAddress = "$name@$domain"
+        start()
+    }
+
+    /**
+     * Neues Gerät für ein bestehendes Konto: Backup-Datei (enthält den Konto-Schlüssel) → neuer Geräteschlüssel → Registrierung am Server.
+     * Das Gerät startet ohne Gespräche; ein aktives Gerät des Kontos nimmt es in die Gruppen auf (siehe docs/MULTIDEVICE.md).
+     */
+    suspend fun linkDevice(file: ByteArray, backupPass: String, newPass: String) = op {
+        val plain = try { uniffi.chat_core.vaultOpenPlain(backupPass, file) } catch (e: Exception) {
+            throw ChatException("Falsche Passphrase oder beschädigte Backup-Datei.")
+        }
+        val j = ChatJson.parseToJsonElement(String(plain)).jsonObject
+        if (j["v"]?.jsonPrimitive?.content != "2") throw ChatException("Dieses Backup hat ein altes Format und kann nicht verwendet werden.")
+        val address = j["address"]!!.jsonPrimitive.content
+        val (name, domain) = splitAddress(address) ?: throw ChatException("Ungültiges Backup.")
+        val c = MlsClient.linkDevice(address, j["aik"]!!.jsonPrimitive.content.unb64())
+        val info = Api(domain, null, http).serverInfo()
+        if (info.domain != domain) throw ChatException("Der Server meldet einen anderen Namen als im Backup.")
+        val reg = deviceRegistration(c)
+        val ts = clock() / 1000
+        val sig = c.signAccount("CHAT-ADD-DEVICE-V1\n$domain\n$name\n$ts\n${reg.deviceId}".toByteArray()).b64()
+        Api(domain, null, http).addDevice(
+            buildJsonObject {
+                put("name", name); put("ts", ts); put("sig", sig); put("device", reg.device); put("inbox", reg.inbox)
+                put("keypackages", JsonArray(reg.keypackages.map { JsonPrimitive(it) })); put("last_resort", reg.lastResort)
+            }.toString(),
+        )
+        val st = AppState(me = Me(address, domain, name, reg.deviceId, reg.inboxId), intro = null)
+        val sync = j["sync"]?.jsonObject
+        if (sync != null) {
+            fun <T> opt(k: String, ser: kotlinx.serialization.KSerializer<T>): T? = sync[k]?.let { ChatJson.decodeFromJsonElement(ser, it) }
+            opt("contacts", kotlinx.serialization.builtins.MapSerializer(kotlinx.serialization.serializer<String>(), Contact.serializer()))?.let { st.contacts.putAll(it) }
+            opt("blockedUsers", kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()))?.let { st.blockedUsers = it.toMutableList() }
+            opt("blockedServers", kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()))?.let { st.blockedServers = it.toMutableList() }
+            opt("allowUsers", kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()))?.let { st.allowUsers = it.toMutableList() }
+            opt("allowServers", kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()))?.let { st.allowServers = it.toMutableList() }
+            sync["filterMode"]?.jsonPrimitive?.content?.let { st.filterMode = it }
+            sync["serverSideFilter"]?.jsonPrimitive?.boolean?.let { st.serverSideFilter = it }
+            sync["directSend"]?.jsonPrimitive?.boolean?.let { st.directSend = it }
+            sync["sendDelivered"]?.jsonPrimitive?.boolean?.let { st.sendDelivered = it }
+            sync["sendRead"]?.jsonPrimitive?.boolean?.let { st.sendRead = it }
+            sync["onceDropOwnCopy"]?.jsonPrimitive?.boolean?.let { st.onceDropOwnCopy = it }
+            sync["intro"]?.takeIf { it !is kotlinx.serialization.json.JsonNull }?.let { st.intro = ChatJson.decodeFromJsonElement(IntroBox.serializer(), it) }
+        }
+        st.backupDone = true // das Backup existiert ja bereits
+        st.mailboxes[reg.inboxId] = reg.inboxKey
+        st.intro?.let { st.mailboxes[it.mailbox_id] = it.key }
+        client = c
+        this.info = info
+        state = st
+        vault = VaultSession.create(newPass)
+        persist()
+        store.write("meta", address.toByteArray())
+        knownAddress = address
         start()
     }
 
@@ -162,17 +241,30 @@ class Engine(
         try { uniffi.chat_core.vaultOpenPlain(passphrase, blob); true } catch (e: Exception) { false }
     }
 
-    /** Backup als verschlüsselte Datei (Format identisch zum Web-Client). */
-    suspend fun exportBackup(passphrase: String): ByteArray = op { uniffi.chat_core.vaultSeal(passphrase, serialize()) }
-
-    suspend fun restoreBackup(file: ByteArray, backupPass: String, newPass: String) = op {
-        openVault(backupPass, file)
-        vault = VaultSession.create(newPass)
-        persist()
-        knownAddress = state!!.me.address
-        store.write("meta", knownAddress!!.toByteArray())
-        start()
+    /**
+     * Backup-Datei (Format identisch zum Web-Client): Konto-Schlüssel (AIK), Einstellungen und Kontakte, **kein MLS-Zustand**
+     * (deshalb kein Zustandsfork); Verlauf und Gruppen kommen auf neuen Geräten per Aufnahme durch ein aktives Gerät.
+     */
+    suspend fun exportBackup(passphrase: String): ByteArray = op {
+        val s = state!!
+        val sync = buildJsonObject {
+            put("contacts", ChatJson.encodeToJsonElement(kotlinx.serialization.builtins.MapSerializer(kotlinx.serialization.serializer<String>(), Contact.serializer()), s.contacts))
+            put("blockedUsers", ChatJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()), s.blockedUsers))
+            put("blockedServers", ChatJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()), s.blockedServers))
+            put("allowUsers", ChatJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()), s.allowUsers))
+            put("allowServers", ChatJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()), s.allowServers))
+            put("filterMode", s.filterMode); put("serverSideFilter", s.serverSideFilter); put("directSend", s.directSend)
+            put("sendDelivered", s.sendDelivered); put("sendRead", s.sendRead); put("onceDropOwnCopy", s.onceDropOwnCopy)
+            s.intro?.let { put("intro", ChatJson.encodeToJsonElement(IntroBox.serializer(), it)) }
+        }
+        val json = buildJsonObject {
+            put("v", 2); put("address", s.me.address); put("aik", client!!.exportIdentity().b64()); put("sync", sync)
+        }.toString()
+        uniffi.chat_core.vaultSeal(passphrase, json.toByteArray())
     }
+
+    /** Nach dem Speichern der Backup-Datei aufrufen (hebt die Pflicht nach der Registrierung auf). */
+    suspend fun markBackupDone() = op { state!!.backupDone = true; dirty() }
 
     private fun serialize(): ByteArray = buildJsonObject {
         put("mls", client!!.exportState().b64())
@@ -227,6 +319,7 @@ class Engine(
         val c = client!!
         api = Api(s.me.domain, object : Signer {
             override val name = s.me.name
+            override val deviceId = s.me.deviceId
             override fun sign(data: ByteArray) = c.sign(data)
         }, http)
         info = runCatching { api!!.serverInfo() }.getOrNull() ?: info
@@ -255,9 +348,11 @@ class Engine(
                             backoff = 1000
                             _online.value = true
                             incoming.trySend { catchUp() }
+                            incoming.trySend { reconcileDevices() }
                             incoming.trySend { retryOutbox() }
                             incoming.trySend { replenishKeyPackages() }
                         }
+                        "devices" -> incoming.trySend { reconcileDevices() }
                         "message" -> {
                             val seq = m["seq"]!!.jsonPrimitive.content.toLong()
                             val mb = m["mailbox_id"]!!.jsonPrimitive.content
@@ -335,17 +430,21 @@ class Engine(
         val s = state!!
         val key = s.mailboxes[mailboxId] ?: return
         val o = try { uniffi.chat_core.envelopeOpen(key.unb64(), data) } catch (e: Exception) { return }
+        if (String(o.senderDevice) == s.me.deviceId) return // eigene Kopie (Zustellung an alle Geräte des Kontos)
         when (o.kind) {
-            KIND_WELCOME -> handleWelcome(o.payload)
+            KIND_WELCOME -> handleWelcome(o.payload, mailboxId == s.me.inboxId)
             KIND_MLS -> handleMls(o.groupId.hex(), o.groupId, o.payload)
         }
     }
 
+    /** Ein Eintrag je Gerät (MLS-Blatt). */
     private fun readMembers(gid: ByteArray): List<Member> =
         ChatJson.parseToJsonElement(client!!.members(gid)).jsonArray.map {
             val o = it.jsonObject
-            Member(o["address"]!!.jsonPrimitive.content, o["identity"]!!.jsonPrimitive.content)
+            Member(o["address"]!!.jsonPrimitive.content, o["identity"]!!.jsonPrimitive.content, o["device"]!!.jsonPrimitive.content)
         }
+
+    private fun memberAddresses(conv: Conversation): List<String> = conv.members.map { it.address }.distinct()
 
     private fun pinMembers(conv: Conversation) {
         val s = state!!
@@ -360,25 +459,31 @@ class Engine(
         }
     }
 
-    private suspend fun handleWelcome(welcome: ByteArray) {
+    /**
+     * `viaInbox`: das Welcome kam in der Geräte-Inbox an, also von einem anderen Gerät des eigenen Kontos
+     * (Gerät wurde hinzugefügt): kein Anfrage-Dialog, sofort aktiv.
+     */
+    private suspend fun handleWelcome(welcome: ByteArray, viaInbox: Boolean) {
         val s = state!!
         val gid = client!!.join(welcome)
         val id = gid.hex()
         if (s.conversations.containsKey(id)) return
         val members = readMembers(gid)
-        val others = members.filter { it.address != s.me.address }
+        val addrs = members.map { it.address }.distinct()
+        val others = addrs.filter { it != s.me.address }
         // Blockierte oder nicht erlaubte Absender: stillschweigend verwerfen (der Absender erfährt nichts).
-        val blocked = others.any { it.address in s.blockedUsers || (splitAddress(it.address)?.second ?: "") in s.blockedServers } ||
-            (s.filterMode == "allow" && others.none { !isBlocked(it.address) })
-        if (blocked) { client!!.deleteGroup(gid); return }
-        val kind = if (members.size == 2) "dm" else "group"
+        val blocked = !viaInbox && (others.any { it in s.blockedUsers || (splitAddress(it)?.second ?: "") in s.blockedServers } ||
+            (s.filterMode == "allow" && others.none { !isBlocked(it) }))
+        if (blocked || others.isEmpty()) { client!!.deleteGroup(gid); return }
+        val kind = if (addrs.size == 2) "dm" else "group"
         val conv = Conversation(
-            id = id, kind = kind, title = if (kind == "dm") others.firstOrNull()?.address ?: "?" else "Gruppe",
-            status = "request", members = members, unread = 1, createdAt = clock(),
+            id = id, kind = kind, title = if (kind == "dm") others[0] else "Gruppe",
+            status = if (viaInbox) "active" else "request", members = members, unread = if (viaInbox) 0 else 1, createdAt = clock(),
         )
         s.conversations[id] = conv
         pinMembers(conv)
-        if (kind == "dm" && s.contacts[others.firstOrNull()?.address]?.verified == true) acceptRequestLocked(id)
+        if (viaInbox) { conv.pendingAnnounce = true; return } // erst ankündigen, wenn die Verzeichnisse da sind
+        if (kind == "dm" && s.contacts[others[0]]?.verified == true) acceptRequestLocked(id)
     }
 
     private suspend fun handleMls(id: String, gid: ByteArray, payload: ByteArray) {
@@ -394,42 +499,53 @@ class Engine(
                 } else {
                     conv.members = readMembers(gid)
                     pinMembers(conv)
-                    if (conv.kind == "group") rebuildCaps(conv)
+                    rebuildCaps(conv)
                 }
             }
             "application" -> {
                 val sender = res["sender"]!!.jsonPrimitive.content
-                // Zustand ist fortgeschrieben; blockierte Absender werden erst jetzt verworfen.
-                if (isBlocked(sender)) return
+                val senderDevice = res["senderDevice"]?.jsonPrimitive?.content ?: ""
+                // Zustand ist fortgeschrieben; blockierte Absender werden erst jetzt verworfen (eigene Geräte nie).
+                if (sender != s.me.address && isBlocked(sender)) return
                 val env = ChatJson.decodeFromJsonElement(Envelope.serializer(), res["envelope"]!!)
-                applyContent(conv, sender, env)
+                applyContent(conv, sender, senderDevice, env)
                 flushRelays()
                 flushReceipts()
+                if (conv.pendingAnnounce == true && conv.status == "active" && conv.caps.isNotEmpty()) {
+                    conv.pendingAnnounce = null
+                    ensureMailbox(conv)
+                    announce(conv)
+                }
             }
         }
     }
 
+    /** Postfächer von Geräten entfernen, die nicht mehr Mitglied sind. */
     private fun rebuildCaps(conv: Conversation) {
+        val leaves = conv.members.map { "${it.address}#${it.device}" }.toSet()
         val addrs = conv.members.map { it.address }.toSet()
-        conv.caps.keys.retainAll(addrs)
+        conv.caps.keys.retainAll { k -> if ('#' in k) k in leaves else k in addrs }
     }
 
-    private fun applyContent(conv: Conversation, sender: String, env: Envelope) {
+    private fun applyContent(conv: Conversation, sender: String, senderDevice: String, env: Envelope) {
         if (conv.members.none { it.address == sender }) return
         when (val c = env.content) {
             is Content.Message -> {
                 if (conv.messages.any { it.id == env.id }) return
                 val once = c.once == true && conv.kind == "dm" // Einmal-Nachrichten gibt es nur in 1:1-Chats
+                val own = sender == state!!.me.address // von einem anderen eigenen Gerät
                 val msg = Msg(
-                    id = env.id, from = sender, ts = minOf(env.ts, clock() + 5 * 60_000), parts = c.parts, status = "received",
+                    id = env.id, from = sender, ts = minOf(env.ts, clock() + 5 * 60_000), parts = c.parts, status = if (own) "sent" else "received",
                     expiresAt = if (conv.disappearSeconds > 0) clock() + conv.disappearSeconds * 1000 else null,
                     once = if (once) true else null,
                 )
                 conv.messages.add(msg)
                 conv.messages.sortBy { it.ts }
-                conv.unread++
-                _newMessages.tryEmit(conv.id)
-                if (conv.kind == "dm" && state!!.sendDelivered) receipts.add(PendingReceipt(conv.id, "delivered", listOf(env.id)))
+                if (!own) {
+                    conv.unread++
+                    _newMessages.tryEmit(conv.id)
+                    if (conv.kind == "dm" && state!!.sendDelivered) receipts.add(PendingReceipt(conv.id, "delivered", listOf(env.id)))
+                }
             }
             is Content.Receipt -> {
                 if (conv.kind != "dm" || sender == state!!.me.address) return
@@ -457,26 +573,34 @@ class Engine(
             is Content.Disappear -> conv.disappearSeconds = c.seconds.coerceIn(0, 365L * 86400)
             is Content.GroupName -> if (conv.kind == "group") conv.title = c.name.take(80)
             is Content.Directory -> for (e in c.entries) {
-                val before = conv.caps[e.address]?.mailbox_id
-                mergeCap(conv, sender, e)
-                val after = conv.caps[e.address]?.mailbox_id
-                // Neue Selbst-Ankündigung: an die übrigen Mitglieder weiterreichen.
-                if (e.address == sender && after != null && after != before && conv.status == "active" && conv.kind == "group") {
+                val key = "${e.address}#${e.device}"
+                val before = conv.caps[key]?.mailbox_id
+                mergeCap(conv, sender, senderDevice, e)
+                val after = conv.caps[key]?.mailbox_id
+                // Neue Selbst-Ankündigung eines Geräts: an die übrigen Mitglieder weiterreichen.
+                if (e.address == sender && e.device == senderDevice && after != null && after != before && conv.status == "active") {
                     relays.add(Triple(conv.id, e, sender))
                 }
             }
         }
     }
 
-    /** Caps nur vom Besitzer selbst überschreibbar; für andere gilt „first write wins“. */
-    private fun mergeCap(conv: Conversation, sender: String, e: CapEntry) {
-        if (splitAddress(e.address) == null || e.domain.isEmpty() || e.mailbox_id.isEmpty() || e.send_token.isEmpty() || e.key.isEmpty()) return
-        val cur = conv.caps[e.address]
-        if (e.address == sender || cur == null || cur.intro == true) {
-            if (e.address != sender && conv.members.none { it.address == e.address }) return
-            conv.caps[e.address] = Cap(e.domain, e.mailbox_id, e.send_token, e.key)
-        }
+    /** Ein Gerät darf nur sein eigenes Postfach überschreiben; für andere Geräte gilt „first write wins“. */
+    private fun mergeCap(conv: Conversation, sender: String, senderDevice: String, e: CapEntry) {
+        val s = state!!
+        if (splitAddress(e.address) == null || e.device.isEmpty() || e.domain.isEmpty() || e.mailbox_id.isEmpty() || e.send_token.isEmpty() || e.key.isEmpty()) return
+        if (e.address == s.me.address && e.device == s.me.deviceId) return // wir selbst
+        val key = "${e.address}#${e.device}"
+        val isSelf = e.address == sender && e.device == senderDevice
+        if (!isSelf && conv.caps.containsKey(key)) return
+        if (!isSelf && conv.members.none { it.address == e.address && it.device == e.device }) return
+        conv.caps[key] = Cap(e.domain, e.mailbox_id, e.send_token, e.key, device = e.device)
     }
+
+    /** Alle bekannten Geräte-Postfächer der Unterhaltung (ohne Intro-Platzhalter und ohne `exceptKey`). */
+    private fun knownEntries(conv: Conversation, exceptKey: String? = null): List<CapEntry> =
+        conv.caps.filter { (k, c) -> k != exceptKey && c.intro != true && c.device != null }
+            .map { (k, c) -> CapEntry(k.substringBefore('#'), c.device!!, c.domain, c.mailbox_id, c.send_token, c.key) }
 
     private suspend fun flushReceipts() {
         val s = state!!
@@ -496,11 +620,12 @@ class Engine(
         for ((convId, entry, sender) in list) {
             val conv = s.conversations[convId] ?: continue
             if (conv.status != "active") continue
-            val others = conv.members.map { it.address }.filter { it != s.me.address && it != sender }
+            val senderKey = "$sender#${entry.device}"
+            val others = conv.members
+                .filter { !(it.address == s.me.address && it.device == s.me.deviceId) && "${it.address}#${it.device}" != senderKey }
+                .map { "${it.address}#${it.device}" }
             if (others.isNotEmpty()) sendContent(conv, Content.Directory(listOf(entry)), others)
-            val known = conv.caps.filter { (a, k) -> a != sender && k.intro != true }
-                .map { (a, k) -> CapEntry(a, k.domain, k.mailbox_id, k.send_token, k.key) }
-            if (known.isNotEmpty()) sendContent(conv, Content.Directory(known), listOf(sender))
+            sendContent(conv, Content.Directory(knownEntries(conv, senderKey)), listOf(senderKey))
         }
     }
 
@@ -556,20 +681,41 @@ class Engine(
         sendCt(conv, gid, KIND_MLS, encryptEnvelope(gid, newEnvelope(content)), only)
     }
 
+    /**
+     * Postfächer für den Versand: je Mitglieds-Gerät das angekündigte Postfach; kennen wir von einem Konto noch kein Geräte-Postfach,
+     * dient das Intro-Postfach (kontoweit) als Ersatz. `only`: Einträge `adresse` (alle Geräte) oder `adresse#gerät`.
+     */
+    private fun capsForSend(conv: Conversation, only: List<String>?): List<Cap> {
+        val s = state!!
+        val out = mutableListOf<Cap>()
+        for (addr in memberAddresses(conv)) {
+            val leaves = conv.members.filter { it.address == addr && !(addr == s.me.address && it.device == s.me.deviceId) }
+            if (leaves.isEmpty()) continue
+            val caps = mutableListOf<Cap>()
+            for (l in leaves) {
+                val key = "$addr#${l.device}"
+                if (only != null && addr !in only && key !in only) continue
+                conv.caps[key]?.let { caps.add(it) }
+            }
+            if (caps.isEmpty() && addr != s.me.address && (only == null || addr in only)) conv.caps[addr]?.let { caps.add(it) }
+            out.addAll(caps)
+        }
+        return out
+    }
+
     private suspend fun sendCt(conv: Conversation, gid: ByteArray, kind: UByte, ct: ByteArray, only: List<String>?): Int {
-        val me = state!!.me.address
+        val dev = state!!.me.deviceId.toByteArray()
         var sent = 0
-        for (m in conv.members) {
-            if (m.address == me || (only != null && m.address !in only)) continue
-            val cap = conv.caps[m.address] ?: continue
-            deliver(cap, uniffi.chat_core.envelopeSeal(cap.key.unb64(), kind, gid, ct))
+        for (cap in capsForSend(conv, only)) {
+            deliver(cap, uniffi.chat_core.envelopeSeal(cap.key.unb64(), kind, gid, dev, ct))
             sent++
         }
         return sent
     }
 
-    private suspend fun newMailbox(): MyMailbox {
-        val r = ChatJson.parseToJsonElement(api!!.call("POST", "/v1/mailboxes")).jsonObject
+    /** `account`: kontoweit (Zustellung an alle Geräte), sonst nur für dieses Gerät. */
+    private suspend fun newMailbox(account: Boolean = false): MyMailbox {
+        val r = ChatJson.parseToJsonElement(api!!.call("POST", "/v1/mailboxes", if (account) "{\"scope\":\"account\"}" else null)).jsonObject
         val key = uniffi.chat_core.envelopeKey().b64()
         val id = r["mailbox_id"]!!.jsonPrimitive.content
         state!!.mailboxes[id] = key
@@ -584,7 +730,7 @@ class Engine(
         val s = state!!
         ensureMailbox(conv)
         val mb = conv.myMailbox!!
-        val me = CapEntry(s.me.address, s.me.domain, mb.id, mb.token, mb.key)
+        val me = CapEntry(s.me.address, s.me.deviceId, s.me.domain, mb.id, mb.token, mb.key)
         val gid = conv.id.unhex()
         sendCt(conv, gid, KIND_MLS, encryptEnvelope(gid, newEnvelope(Content.Directory(listOf(me) + extra))), only)
     }
@@ -606,7 +752,7 @@ class Engine(
             s.mailboxes.remove(s.intro!!.mailbox_id)
             s.intro = null
         } else if (on && s.intro == null) {
-            val mb = newMailbox()
+            val mb = newMailbox(account = true)
             s.intro = IntroBox(mb.id, mb.token, mb.key)
         }
         dirty()
@@ -618,12 +764,13 @@ class Engine(
         if (addr == s.me.address) throw ChatException("Das bist du selbst.")
         if (addr in s.blockedUsers) throw ChatException("Dieser Nutzer ist blockiert.")
         s.conversations.values.firstOrNull { it.kind == "dm" && it.status != "left" && it.members.any { m -> m.address == addr } }?.let { return@op it.id }
-        val (kp, ik) = fetchKeyPackage(addr)
+        val (kps, ik) = fetchKeyPackages(addr)
         val contact = s.contacts.getOrPut(addr) { Contact(addr, ik) }
-        if (contact.ik != ik) throw ChatException("Der Schlüssel dieses Kontakts hat sich geändert. Bitte neu verifizieren.")
+        if (contact.ik != ik) throw ChatException("Der Schlüssel dieses Kontos hat sich geändert. Bitte neu verifizieren.")
         contact.intro = card.cap
         val gid = client!!.createGroup()
-        val add = client!!.addMembers(gid, listOf(kp))
+        // Alle Geräte des Kontakts werden aufgenommen; das Welcome geht an das kontoweite Intro-Postfach (alle Geräte erhalten es).
+        val add = client!!.addMembers(gid, kps.map { it.second })
         val id = gid.hex()
         val conv = Conversation(
             id = id, kind = "dm", title = addr, status = "active", members = readMembers(gid),
@@ -632,21 +779,32 @@ class Engine(
         s.conversations[id] = conv
         ensureMailbox(conv)
         flush()
-        deliver(card.cap, uniffi.chat_core.envelopeSeal(card.cap.key.unb64(), KIND_WELCOME, ByteArray(0), add.welcome))
+        deliver(card.cap, uniffi.chat_core.envelopeSeal(card.cap.key.unb64(), KIND_WELCOME, ByteArray(0), s.me.deviceId.toByteArray(), add.welcome))
         announce(conv)
         dirty()
         id
     }
 
-    private suspend fun fetchKeyPackage(addr: String): Pair<ByteArray, String> {
+    /** KeyPackages aller (oder der genannten) Geräte eines Kontos; prüft Adresse, Konto-Schlüssel und Gerätezertifikat. */
+    private suspend fun fetchKeyPackages(addr: String, devices: List<String> = emptyList()): Pair<List<Pair<String, ByteArray>>, String> {
         val enc = java.net.URLEncoder.encode(addr, "UTF-8")
-        val r = ChatJson.parseToJsonElement(api!!.call("GET", "/v1/resolve/$enc/keypackage")).jsonObject
-        val kp = r["keypackage"]!!.jsonPrimitive.content.unb64()
-        val id = ChatJson.parseToJsonElement(client!!.keyPackageIdentity(kp)).jsonObject
-        if (id["address"]!!.jsonPrimitive.content != addr) throw ChatException("Der Server hat ein KeyPackage für eine andere Adresse geliefert.")
-        val ik = id["identity"]!!.jsonPrimitive.content
-        if (ik != r["ik"]!!.jsonPrimitive.content.unb64().hex()) throw ChatException("Schlüssel stimmt nicht überein (möglicher Manipulationsversuch).")
-        return kp to ik
+        val q = if (devices.isEmpty()) "" else "?" + devices.joinToString("&") { "device=$it" }
+        val r = ChatJson.parseToJsonElement(api!!.call("GET", "/v1/resolve/$enc/keypackages$q")).jsonObject
+        val ik = r["ik"]!!.jsonPrimitive.content.unb64().hex()
+        val kps = r["devices"]!!.jsonArray.map { d ->
+            val o = d.jsonObject
+            val kp = o["keypackage"]!!.jsonPrimitive.content.unb64()
+            val id = try { ChatJson.parseToJsonElement(client!!.keyPackageIdentity(kp)).jsonObject } catch (e: Exception) {
+                throw ChatException("Ungültiges Gerätezertifikat (möglicher Manipulationsversuch).")
+            }
+            if (id["address"]!!.jsonPrimitive.content != addr) throw ChatException("Der Server hat ein KeyPackage für eine andere Adresse geliefert.")
+            if (id["identity"]!!.jsonPrimitive.content != ik) throw ChatException("Schlüssel stimmt nicht überein (möglicher Manipulationsversuch).")
+            val dev = o["device"]!!.jsonPrimitive.content
+            if (id["device"]!!.jsonPrimitive.content != dev) throw ChatException("Gerätekennung stimmt nicht überein.")
+            dev to kp
+        }
+        if (kps.isEmpty()) throw ChatException("Kein Gerät dieses Kontos ist erreichbar.")
+        return kps to ik
     }
 
     private suspend fun acceptRequestLocked(id: String) {
@@ -666,17 +824,43 @@ class Engine(
         dirty()
     }
 
+    /** Bekannte Postfächer eines Kontos: Geräte-Postfächer aus aktiven 1:1-Chats, sonst das Intro-Postfach. */
+    private fun knownCaps(addr: String): Map<String, Cap> {
+        val s = state!!
+        val out = mutableMapOf<String, Cap>()
+        for (c in s.conversations.values) {
+            if (c.kind != "dm" || c.status != "active") continue
+            for ((k, cap) in c.caps) if (k.startsWith("$addr#") && cap.intro != true) out[k] = cap
+        }
+        if (out.isEmpty()) {
+            (s.contacts[addr]?.intro ?: s.conversations.values.firstNotNullOfOrNull { it.caps[addr] })?.let { out[addr] = it }
+        }
+        return out
+    }
+
+    /** Welcome an alle Geräte eines Mitglieds: Geräte-Postfächer plus (falls nicht jedes Gerät eines hat) das kontoweite Intro-Postfach. */
+    private suspend fun sendWelcomeTo(conv: Conversation, gid: ByteArray, welcome: ByteArray, addr: String) {
+        val s = state!!
+        val dev = s.me.deviceId.toByteArray()
+        val leaves = conv.members.filter { it.address == addr }
+        val caps = leaves.mapNotNull { conv.caps["$addr#${it.device}"] }.toMutableList()
+        val intro = s.contacts[addr]?.intro ?: conv.caps[addr]
+        if (intro != null && (caps.size < leaves.size || caps.isEmpty())) caps.add(intro)
+        for (cap in caps) deliver(cap, uniffi.chat_core.envelopeSeal(cap.key.unb64(), KIND_WELCOME, gid, dev, welcome))
+    }
+
     suspend fun createGroup(title: String, addresses: List<String>): String = op {
         val s = state!!
         if (addresses.isEmpty()) throw ChatException("Mindestens ein Mitglied wählen.")
         val kps = mutableListOf<ByteArray>()
         val caps = mutableMapOf<String, Cap>()
         for (a in addresses) {
-            val cap = knownCap(a) ?: throw ChatException("$a ist kein bekannter Kontakt.")
-            val (kp, ik) = fetchKeyPackage(a)
+            val known = knownCaps(a)
+            if (known.isEmpty()) throw ChatException("$a ist kein bekannter Kontakt.")
+            val (list, ik) = fetchKeyPackages(a)
             val c = s.contacts.getOrPut(a) { Contact(a, ik) }
             if (c.ik != ik) throw ChatException("Schlüssel von $a hat sich geändert.")
-            kps.add(kp); caps[a] = cap
+            kps.addAll(list.map { it.second }); caps.putAll(known)
         }
         val gid = client!!.createGroup()
         val add = client!!.addMembers(gid, kps)
@@ -688,20 +872,11 @@ class Engine(
         s.conversations[id] = conv
         ensureMailbox(conv)
         flush()
-        sendCt(conv, gid, KIND_WELCOME, add.welcome, null)
+        for (a in addresses) sendWelcomeTo(conv, gid, add.welcome, a)
         announce(conv)
         broadcast(conv, newEnvelope(Content.GroupName(conv.title)))
         dirty()
         id
-    }
-
-    private fun knownCap(addr: String): Cap? {
-        val s = state!!
-        for (c in s.conversations.values) {
-            val cap = c.caps[addr]
-            if (c.kind == "dm" && c.status == "active" && cap != null && cap.intro != true) return cap
-        }
-        return s.contacts[addr]?.intro ?: s.conversations.values.firstNotNullOfOrNull { it.caps[addr] }
     }
 
     suspend fun addMember(id: String, address: String) = op {
@@ -709,33 +884,121 @@ class Engine(
         val conv = s.conversations[id]
         if (conv == null || conv.kind != "group") throw ChatException("Keine Gruppe.")
         if (conv.members.any { it.address == address }) throw ChatException("Bereits Mitglied.")
-        val cap = knownCap(address) ?: throw ChatException("$address ist kein bekannter Kontakt.")
-        val (kp, ik) = fetchKeyPackage(address)
+        val known = knownCaps(address)
+        if (known.isEmpty()) throw ChatException("$address ist kein bekannter Kontakt.")
+        val (list, ik) = fetchKeyPackages(address)
         val c = s.contacts.getOrPut(address) { Contact(address, ik) }
         if (c.ik != ik) throw ChatException("Schlüssel hat sich geändert.")
         val gid = id.unhex()
-        val add = client!!.addMembers(gid, listOf(kp))
-        val others = conv.members.map { it.address }.filter { it != s.me.address }
+        val before = memberAddresses(conv)
+        val add = client!!.addMembers(gid, list.map { it.second })
         conv.members = readMembers(gid)
-        sendCt(conv, gid, KIND_MLS, add.commit, others)
-        conv.caps[address] = cap
-        sendCt(conv, gid, KIND_WELCOME, add.welcome, listOf(address))
-        val dir = conv.caps.filter { (a, _) -> a != address }.map { (a, k) -> CapEntry(a, k.domain, k.mailbox_id, k.send_token, k.key) }
-        announce(conv, dir, listOf(address))
+        sendCt(conv, gid, KIND_MLS, add.commit, before) // Commit an bisherige Mitglieder
+        conv.caps.putAll(known)
+        sendWelcomeTo(conv, gid, add.welcome, address)
+        announce(conv, knownEntries(conv), listOf(address))
         broadcast(conv, newEnvelope(Content.GroupName(conv.title)))
         dirty()
     }
 
     suspend fun removeMember(id: String, address: String) = op {
-        val s = state!!
-        val conv = s.conversations[id] ?: return@op
+        val conv = state!!.conversations[id] ?: return@op
         if (conv.kind != "group") return@op
         val gid = id.unhex()
         val commit = client!!.removeMembers(gid, listOf(address))
-        val targets = conv.members.map { it.address }.filter { it != s.me.address }
-        sendCt(conv, gid, KIND_MLS, commit, targets)
+        // Auch an die entfernten Geräte senden (sie erfahren so von der Entfernung); erst danach Mitglieder/Postfächer aktualisieren.
+        sendCt(conv, gid, KIND_MLS, commit, null)
         conv.members = readMembers(gid)
-        conv.caps.remove(address)
+        rebuildCaps(conv)
+        dirty()
+    }
+
+    // ---------- Geräte (Multi-Device) ----------
+
+    suspend fun listDevices(): List<DeviceInfo> = op {
+        ChatJson.decodeFromString(kotlinx.serialization.builtins.ListSerializer(DeviceInfo.serializer()), api!!.call("GET", "/v1/devices"))
+    }
+
+    /** Gerät widerrufen: es verliert Anmeldung und Postfach; ein aktives Gerät entfernt es aus allen Gruppen. */
+    suspend fun revokeDevice(id: String) = op {
+        api!!.call("DELETE", "/v1/devices/$id")
+        incoming.trySend { reconcileDevices() }
+    }
+
+    private fun inboxCap(deviceId: String): Cap {
+        val s = state!!
+        val i = ChatJson.parseToJsonElement(client!!.deviceInbox(deviceId)).jsonObject
+        return Cap(s.me.domain, i["mailbox_id"]!!.jsonPrimitive.content, i["token"]!!.jsonPrimitive.content,
+            i["key"]!!.jsonPrimitive.content.unhex().b64(), device = deviceId)
+    }
+
+    private var reconciling = false
+
+    /**
+     * Abgleich der Geräte des eigenen Kontos mit den Blättern in jeder Gruppe: Das Gerät mit der kleinsten ID unter den bereits
+     * beteiligten nimmt neue Geräte auf und entfernt widerrufene (siehe docs/MULTIDEVICE.md).
+     */
+    private suspend fun reconcileDevices() {
+        val s = state ?: return
+        if (api == null || reconciling) return
+        reconciling = true
+        try {
+            val devs = ChatJson.decodeFromString(kotlinx.serialization.builtins.ListSerializer(DeviceInfo.serializer()), api!!.call("GET", "/v1/devices"))
+            val active = devs.map { it.id }.toSet()
+            for (conv in s.conversations.values.toList()) {
+                if (conv.status != "active") continue
+                val own = conv.members.filter { it.address == s.me.address }
+                val present = own.filter { it.device in active }.map { it.device }.sorted()
+                if (present.firstOrNull() != s.me.deviceId) continue // nicht unser Zug
+                val stale = own.filter { it.device !in active }.map { it.device }
+                val missing = devs.map { it.id }.filter { id -> own.none { it.device == id } }
+                try {
+                    if (stale.isNotEmpty()) removeOwnDevices(conv, stale)
+                    if (missing.isNotEmpty()) addOwnDevices(conv, missing)
+                } catch (e: Exception) { System.err.println("reconcile ${conv.id}: $e") }
+            }
+            flush()
+        } finally { reconciling = false }
+    }
+
+    private suspend fun removeOwnDevices(conv: Conversation, stale: List<String>) {
+        val s = state!!
+        val gid = conv.id.unhex()
+        val json = ChatJson.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.json.JsonObject.serializer()),
+            stale.map { d -> buildJsonObject { put("address", s.me.address); put("device", d) } },
+        )
+        val commit = client!!.removeDevices(gid, json)
+        conv.members = readMembers(gid)
+        rebuildCaps(conv)
+        sendCt(conv, gid, KIND_MLS, commit, null)
+        dirty()
+    }
+
+    private suspend fun addOwnDevices(conv: Conversation, deviceIds: List<String>) {
+        val s = state!!
+        val (kps, ik) = fetchKeyPackages(s.me.address, deviceIds)
+        if (ik != client!!.identityPublic().hex()) throw ChatException("Konto-Schlüssel stimmt nicht überein.")
+        val gid = conv.id.unhex()
+        val add = client!!.addMembers(gid, kps.map { it.second })
+        conv.members = readMembers(gid)
+        ensureMailbox(conv)
+        sendCt(conv, gid, KIND_MLS, add.commit, null) // an alle Geräte mit bekanntem Postfach (die neuen noch nicht)
+        val me = s.me.deviceId.toByteArray()
+        val mb = conv.myMailbox!!
+        val entries = listOf(CapEntry(s.me.address, s.me.deviceId, s.me.domain, mb.id, mb.token, mb.key)) + knownEntries(conv)
+        for ((device, _) in kps) {
+            // Welcome und Verzeichnis gehen an die Geräte-Inbox (aus dem Konto-Schlüssel abgeleitet, der Server sieht keine Geheimnisse).
+            val cap = inboxCap(device)
+            val key = cap.key.unb64()
+            deliver(cap, uniffi.chat_core.envelopeSeal(key, KIND_WELCOME, ByteArray(0), me, add.welcome))
+            suspend fun send(content: Content) {
+                val ct = encryptEnvelope(gid, newEnvelope(content))
+                deliver(cap, uniffi.chat_core.envelopeSeal(key, KIND_MLS, gid, me, ct))
+            }
+            send(Content.Directory(entries))
+            if (conv.kind == "group") send(Content.GroupName(conv.title))
+        }
         dirty()
     }
 
@@ -834,7 +1097,7 @@ class Engine(
         val conv = state!!.conversations[id] ?: return@op
         if (conv.messages.none { it.id == ref }) return@op
         val env = newEnvelope(Content.Reaction(ref, emoji))
-        applyContent(conv, state!!.me.address, env)
+        applyContent(conv, state!!.me.address, state!!.me.deviceId, env)
         broadcast(conv, env)
         dirty()
     }

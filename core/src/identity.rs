@@ -57,3 +57,16 @@ mod tests {
         assert_eq!(pair_safety_number(b"a", b"b"), pair_safety_number(b"b", b"a"));
     }
 }
+
+pub fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+pub fn unhex(s: &str) -> Result<Vec<u8>> {
+    if s.len() % 2 != 0 || !s.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Error::Invalid("hex"));
+    }
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| Error::Invalid("hex")))
+        .collect()
+}

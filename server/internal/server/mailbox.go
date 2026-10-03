@@ -16,7 +16,7 @@ type mailboxView struct {
 }
 
 func (s *Server) listMailboxes(w http.ResponseWriter, r *http.Request, u *store.User) {
-	mbs, err := s.st.ListMailboxes(u.ID)
+	mbs, err := s.st.ListMailboxes(u.ID, devOf(r).ID)
 	if err != nil {
 		writeErr(w, 500, "internal error")
 		return
@@ -28,11 +28,23 @@ func (s *Server) listMailboxes(w http.ResponseWriter, r *http.Request, u *store.
 	writeJSON(w, 200, out)
 }
 
-// createMailbox erzeugt ein neues Postfach (Capability) — z. B. eines pro Kontakt.
+// createMailbox erzeugt ein neues Postfach (Capability) **für das anfragende Gerät**, z. B. eines pro Unterhaltung.
 func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request, u *store.User) {
+	// Optional {"scope":"account"}: kontoweites Postfach (z. B. Intro-Link), Zustellung an alle Geräte.
+	var req struct {
+		Scope string `json:"scope"`
+	}
+	if r.ContentLength > 0 && !readJSON(w, r, 1<<10, &req) {
+		return
+	}
+	account := req.Scope == "account"
+	dev := devOf(r).ID
+	if account {
+		dev = ""
+	}
 	tok := randID(24)
 	m := store.MailboxInit{ID: randID(16), TokenHash: hashToken(tok)}
-	switch err := s.st.CreateMailbox(u.ID, m, s.cfg.MaxMailboxes); {
+	switch err := s.st.CreateMailbox(u.ID, dev, account, m, s.cfg.MaxMailboxes); {
 	case errors.Is(err, store.ErrConflict):
 		writeErr(w, 429, "mailbox limit reached")
 	case err != nil:
@@ -44,7 +56,7 @@ func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request, u *store.
 
 // deleteMailbox widerruft die Capability. Wer das Token hat, kann nichts mehr senden (= Blockieren).
 func (s *Server) deleteMailbox(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if err := s.st.DeleteMailbox(u.ID, r.PathValue("id")); err != nil {
+	if err := s.st.DeleteMailbox(u.ID, devOf(r).ID, r.PathValue("id")); err != nil {
 		writeErr(w, 404, "not found")
 		return
 	}
@@ -76,11 +88,14 @@ func (s *Server) deliverLocal(mailboxID, token string, data []byte, origin strin
 			return errBlocked
 		}
 	}
-	seq, err := s.st.Deliver(mb.UserID, mb.ID, data)
+	// Kontoweite Postfächer: Kopie für jedes Gerät; Geräte-Postfächer: nur dieses Gerät.
+	seqs, err := s.st.Deliver(mb.UserID, mb.ID, mb.DeviceID, data)
 	if err != nil {
 		return err
 	}
-	s.hub.publish(mb.UserID, event{Seq: seq, MailboxID: mb.ID, Data: data})
+	for dev, seq := range seqs {
+		s.hub.publish(mb.UserID, dev, event{Type: "message", Seq: seq, MailboxID: mb.ID, Data: data})
+	}
 	return nil
 }
 
@@ -123,7 +138,7 @@ func (s *Server) getMessages(w http.ResponseWriter, r *http.Request, u *store.Us
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	msgs, err := s.st.Messages(u.ID, after, limit)
+	msgs, err := s.st.Messages(u.ID, devOf(r).ID, after, limit)
 	if err != nil {
 		writeErr(w, 500, "internal error")
 		return
@@ -141,7 +156,7 @@ func (s *Server) ackMessages(w http.ResponseWriter, r *http.Request, u *store.Us
 		writeErr(w, 400, "invalid upto")
 		return
 	}
-	if err := s.st.AckMessages(u.ID, upto); err != nil {
+	if err := s.st.AckMessages(u.ID, devOf(r).ID, upto); err != nil {
 		writeErr(w, 500, "internal error")
 		return
 	}
@@ -164,7 +179,7 @@ func (s *Server) putKeyPackages(w http.ResponseWriter, r *http.Request, u *store
 	if !ok {
 		return
 	}
-	switch err := s.st.AddKeyPackages(u.ID, kps, last, s.cfg.MaxKeyPackages); {
+	switch err := s.st.AddKeyPackages(u.ID, devOf(r).ID, kps, last, s.cfg.MaxKeyPackages); {
 	case errors.Is(err, store.ErrConflict):
 		writeErr(w, 409, "too many keypackages")
 	case err != nil:
@@ -175,7 +190,7 @@ func (s *Server) putKeyPackages(w http.ResponseWriter, r *http.Request, u *store
 }
 
 func (s *Server) countKeyPackages(w http.ResponseWriter, r *http.Request, u *store.User) {
-	n, err := s.st.KeyPackageCount(u.ID)
+	n, err := s.st.KeyPackageCount(u.ID, devOf(r).ID)
 	if err != nil {
 		writeErr(w, 500, "internal error")
 		return
@@ -183,22 +198,31 @@ func (s *Server) countKeyPackages(w http.ResponseWriter, r *http.Request, u *sto
 	writeJSON(w, 200, map[string]int{"count": n})
 }
 
-func (s *Server) getKeyPackage(w http.ResponseWriter, r *http.Request) {
+// getKeyPackages liefert je aktivem Gerät des Kontos ein KeyPackage (öffentlich).
+func (s *Server) getKeyPackages(w http.ResponseWriter, r *http.Request) {
 	u, err := s.st.UserByName(r.PathValue("name"))
 	if err != nil {
 		writeErr(w, 404, "not found")
 		return
 	}
-	kp, err := s.st.TakeKeyPackage(u.ID)
+	kps, err := s.st.TakeKeyPackages(u.ID, r.URL.Query()["device"]) // optional: nur bestimmte Geräte
 	if err != nil {
 		writeErr(w, 404, "no keypackage")
 		return
 	}
-	writeJSON(w, 200, map[string]string{"keypackage": b64.EncodeToString(kp), "ik": b64.EncodeToString(u.IK)})
+	type dk struct {
+		Device     string `json:"device"`
+		KeyPackage string `json:"keypackage"`
+	}
+	out := make([]dk, 0, len(kps))
+	for _, k := range kps {
+		out = append(out, dk{k.DeviceID, b64.EncodeToString(k.Data)})
+	}
+	writeJSON(w, 200, map[string]any{"ik": b64.EncodeToString(u.IK), "devices": out})
 }
 
-// resolveKeyPackage: holt ein KeyPackage für `name@domain` (lokal oder per Föderation).
-func (s *Server) resolveKeyPackage(w http.ResponseWriter, r *http.Request, _ *store.User) {
+// resolveKeyPackages: holt die KeyPackages aller Geräte von `name@domain` (lokal oder per Föderation).
+func (s *Server) resolveKeyPackages(w http.ResponseWriter, r *http.Request, _ *store.User) {
 	name, domain, ok := splitAddress(r.PathValue("address"))
 	if !ok {
 		writeErr(w, 400, "invalid address")
@@ -206,10 +230,10 @@ func (s *Server) resolveKeyPackage(w http.ResponseWriter, r *http.Request, _ *st
 	}
 	if s.isLocal(domain) {
 		r.SetPathValue("name", name)
-		s.getKeyPackage(w, r)
+		s.getKeyPackages(w, r)
 		return
 	}
-	body, err := s.fed.fetchKeyPackage(r.Context(), domain, name)
+	body, err := s.fed.fetchKeyPackages(r.Context(), domain, name, r.URL.Query()["device"])
 	if err != nil {
 		writeErr(w, 404, "not found")
 		return

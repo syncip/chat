@@ -31,7 +31,7 @@ export function Onboarding() {
       if (restore) {
         const f = file.current?.files?.[0];
         if (!f) throw new Error('Bitte Backup-Datei wählen.');
-        await e.restoreBackup(new Uint8Array(await f.arrayBuffer()), bpass, pass);
+        await e.linkDevice(new Uint8Array(await f.arrayBuffer()), bpass, pass);
       } else {
         await e.createAccount({ server, name, invite, passphrase: pass });
       }
@@ -58,6 +58,7 @@ export function Onboarding() {
           </>
         ) : (
           <>
+            <p className="muted small">Dieses Gerät wird als weiteres Gerät deines Kontos registriert. Ein bereits aktives Gerät nimmt es danach in deine Chats auf (Verlauf nur ab dann).</p>
             <label>Backup-Datei<input type="file" ref={file} /></label>
             <label>Passphrase des Backups<input type="password" value={bpass} onChange={(x) => setBpass(x.target.value)} /></label>
           </>
@@ -68,9 +69,9 @@ export function Onboarding() {
         <label>Passphrase wiederholen<input type="password" value={pass2} onChange={(x) => setPass2(x.target.value)} autoComplete="new-password" required /></label>
         <p className="warn">Es gibt kein „Passwort vergessen“. Ohne Passphrase und ohne Backup ist dein Konto verloren.</p>
         {err && <p className="error" role="alert">{err}</p>}
-        <button className="primary" disabled={busy}>{busy ? 'Bitte warten …' : restore ? 'Backup wiederherstellen' : 'Konto erstellen'}</button>
+        <button className="primary" disabled={busy}>{busy ? 'Bitte warten …' : restore ? 'Gerät anmelden' : 'Konto erstellen'}</button>
         <button type="button" className="link" onClick={() => setRestore(!restore)}>
-          {restore ? 'Neues Konto erstellen' : 'Konto aus Backup wiederherstellen'}
+          {restore ? 'Neues Konto erstellen' : 'Mit Backup-Datei auf diesem Gerät anmelden'}
         </button>
       </form>
     </div>

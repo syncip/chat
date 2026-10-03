@@ -16,9 +16,10 @@ impl Client {
     pub fn new(address: &str) -> Result<Client, JsError> {
         mls::Client::new(address).map(Client).map_err(js)
     }
-    #[wasm_bindgen(js_name = fromIdentity)]
-    pub fn from_identity(address: &str, keypair: &[u8]) -> Result<Client, JsError> {
-        mls::Client::from_identity(address, keypair).map(Client).map_err(js)
+    /// Neues Gerät für ein bestehendes Konto (AIK-Schlüsselpaar aus der Backup-Datei).
+    #[wasm_bindgen(js_name = linkDevice)]
+    pub fn link_device(address: &str, keypair: &[u8]) -> Result<Client, JsError> {
+        mls::Client::link_device(address, keypair).map(Client).map_err(js)
     }
     #[wasm_bindgen(js_name = importState)]
     pub fn import_state(data: &[u8]) -> Result<Client, JsError> {
@@ -35,6 +36,29 @@ impl Client {
     pub fn address(&self) -> String {
         self.0.address().to_string()
     }
+    #[wasm_bindgen(js_name = deviceId)]
+    pub fn device_id(&self) -> String {
+        self.0.device_id().to_string()
+    }
+    #[wasm_bindgen(js_name = devicePublic)]
+    pub fn device_public(&self) -> Vec<u8> {
+        self.0.device_public()
+    }
+    #[wasm_bindgen(js_name = deviceCert)]
+    pub fn device_cert(&self) -> Vec<u8> {
+        self.0.device_cert()
+    }
+    /// Signiert mit dem Konto-Schlüssel (Registrierung, Gerät hinzufügen).
+    #[wasm_bindgen(js_name = signAccount)]
+    pub fn sign_account(&self, data: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.0.sign_account(data).map_err(js)
+    }
+    /// JSON `{mailbox_id, token, key}` (key hex): Geräte-Postfach, aus dem AIK abgeleitet.
+    #[wasm_bindgen(js_name = deviceInbox)]
+    pub fn device_inbox(&self, device_id: &str) -> Result<String, JsError> {
+        let i = self.0.device_inbox(device_id).map_err(js)?;
+        Ok(serde_json::json!({"mailbox_id": i.mailbox_id, "token": i.token, "key": hex(&i.key)}).to_string())
+    }
     #[wasm_bindgen(js_name = identityPublic)]
     pub fn identity_public(&self) -> Vec<u8> {
         self.0.identity_public()
@@ -49,11 +73,11 @@ impl Client {
         let v = self.0.key_packages(n, last_resort).map_err(js)?;
         Ok(v.into_iter().map(|b| js_sys::Uint8Array::from(&b[..])).collect())
     }
-    /// JSON `{address, identity}` (identity hex).
+    /// JSON `{address, identity, device}` (identity = AIK hex). Prüft das Gerätezertifikat.
     #[wasm_bindgen(js_name = keyPackageIdentity)]
     pub fn key_package_identity(&self, kp: &[u8]) -> Result<String, JsError> {
-        let (a, ik) = self.0.key_package_identity(kp).map_err(js)?;
-        Ok(serde_json::json!({"address": a, "identity": hex(&ik)}).to_string())
+        let d = self.0.key_package_identity(kp).map_err(js)?;
+        Ok(serde_json::json!({"address": d.address, "identity": hex(&d.aik), "device": d.device_id}).to_string())
     }
     #[wasm_bindgen(js_name = createGroup)]
     pub fn create_group(&mut self) -> Result<Vec<u8>, JsError> {
@@ -93,9 +117,9 @@ impl Client {
     /// JSON: `{kind:"application", sender, envelope}` | `{kind:"commit", sender, removedSelf}` | `{kind:"proposal"}`.
     pub fn process(&mut self, gid: &[u8], message: &[u8]) -> Result<String, JsError> {
         let v = match self.0.process(gid, message).map_err(js)? {
-            mls::Received::Application { sender, plaintext } => {
+            mls::Received::Application { sender, sender_device, plaintext } => {
                 let env = Envelope::decode(&plaintext).map_err(js)?;
-                serde_json::json!({"kind":"application","sender":sender,"envelope":env})
+                serde_json::json!({"kind":"application","sender":sender,"senderDevice":sender_device,"envelope":env})
             }
             mls::Received::Commit { sender, removed_self } => {
                 serde_json::json!({"kind":"commit","sender":sender,"removedSelf":removed_self})
@@ -104,14 +128,26 @@ impl Client {
         };
         Ok(v.to_string())
     }
-    /// JSON-Array `[{address, identity(hex)}]`.
+    /// JSON-Array `[{address, identity(AIK hex), device}]`, ein Eintrag je Gerät.
     pub fn members(&self, gid: &[u8]) -> Result<String, JsError> {
         let m = self.0.members(gid).map_err(js)?;
         let v: Vec<_> = m
             .into_iter()
-            .map(|(a, ik)| serde_json::json!({"address": a, "identity": hex(&ik)}))
+            .map(|m| serde_json::json!({"address": m.address, "identity": hex(&m.aik), "device": m.device_id}))
             .collect();
         Ok(serde_json::Value::Array(v).to_string())
+    }
+    /// Einzelne Geräte entfernen: JSON `[{"address":…,"device":…}]`; gibt den Commit zurück.
+    #[wasm_bindgen(js_name = removeDevices)]
+    pub fn remove_devices(&mut self, gid: &[u8], devices_json: &str) -> Result<Vec<u8>, JsError> {
+        #[derive(serde::Deserialize)]
+        struct D {
+            address: String,
+            device: String,
+        }
+        let d: Vec<D> = serde_json::from_str(devices_json).map_err(|_| JsError::new("devices"))?;
+        let pairs: Vec<(String, String)> = d.into_iter().map(|x| (x.address, x.device)).collect();
+        self.0.remove_devices(gid, &pairs).map_err(js)
     }
 }
 
@@ -186,17 +222,18 @@ pub fn envelope_key() -> Vec<u8> {
 }
 
 #[wasm_bindgen(js_name = envelopeSeal)]
-pub fn envelope_seal(key: &[u8], kind: u8, gid: &[u8], payload: &[u8]) -> Result<Vec<u8>, JsError> {
-    envelope::seal(key, kind, gid, payload).map_err(js)
+pub fn envelope_seal(key: &[u8], kind: u8, gid: &[u8], dev: &[u8], payload: &[u8]) -> Result<Vec<u8>, JsError> {
+    envelope::seal(key, kind, gid, dev, payload).map_err(js)
 }
 
-/// Gibt `[kind:number, groupId:Uint8Array, payload:Uint8Array]` zurück.
+/// Gibt `[kind:number, groupId:Uint8Array, senderDevice:Uint8Array, payload:Uint8Array]` zurück.
 #[wasm_bindgen(js_name = envelopeOpen)]
 pub fn envelope_open(key: &[u8], blob: &[u8]) -> Result<js_sys::Array, JsError> {
-    let (k, g, p) = envelope::open(key, blob).map_err(js)?;
+    let (k, g, d, p) = envelope::open(key, blob).map_err(js)?;
     let a = js_sys::Array::new();
     a.push(&JsValue::from(k));
     a.push(&js_sys::Uint8Array::from(&g[..]));
+    a.push(&js_sys::Uint8Array::from(&d[..]));
     a.push(&js_sys::Uint8Array::from(&p[..]));
     Ok(a)
 }

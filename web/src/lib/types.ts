@@ -5,6 +5,8 @@ export interface Cap {
   key: string; // base64, Umschlag-Schlüssel
   /** true: nur Intro-Postfach (Platzhalter bis zur Selbst-Ankündigung des Kontakts) */
   intro?: boolean;
+  /** Gerät, dem das Postfach gehört (jedes Gerät hat eigene Unterhaltungs-Postfächer). */
+  device?: string;
 }
 
 export type Part =
@@ -25,6 +27,7 @@ export type Part =
 
 export interface CapEntry extends Cap {
   address: string;
+  device: string;
 }
 
 export type Content =
@@ -67,13 +70,16 @@ export interface Conversation {
   kind: 'dm' | 'group';
   title: string;
   status: 'active' | 'request' | 'left';
-  members: { address: string; ik: string }[];
+  /** Ein Eintrag je Gerät (MLS-Blatt); `ik` = Konto-Schlüssel (AIK). */
+  members: { address: string; ik: string; device: string }[];
   caps: Record<string, Cap>; // address → Postfach, an das wir senden
   myMailbox?: { id: string; key: string; token: string };
   messages: Msg[];
   unread: number;
   disappearSeconds: number;
   warning?: string;
+  /** Gerät wurde per Welcome aus dem eigenen Konto aufgenommen: Postfach erst ankündigen, wenn die Verzeichnisse da sind. */
+  pendingAnnounce?: boolean;
   createdAt: number;
 }
 
@@ -88,7 +94,9 @@ export type FilterMode = 'off' | 'block' | 'allow';
 
 export interface AppState {
   v: 1;
-  me: { address: string; domain: string; name: string };
+  me: { address: string; domain: string; name: string; deviceId: string; inboxId: string };
+  /** Backup-Datei wurde gespeichert (Pflicht nach der Registrierung). */
+  backupDone: boolean;
   intro: { mailbox_id: string; send_token: string; key: string } | null;
   conversations: Record<string, Conversation>;
   contacts: Record<string, Contact>;
@@ -127,4 +135,10 @@ export interface ServerInfo {
     blob_retention_days: number;
     message_retention_days: number;
   };
+}
+
+export interface DeviceInfo {
+  id: string;
+  created_at: number;
+  current: boolean;
 }

@@ -23,11 +23,14 @@ data class Cap(
     val key: String,
     /** true: nur Intro-Postfach (Platzhalter bis zur Selbst-Ankündigung des Kontakts). */
     val intro: Boolean? = null,
+    /** Gerät, dem das Postfach gehört (jedes Gerät hat eigene Unterhaltungs-Postfächer). */
+    val device: String? = null,
 )
 
 @Serializable
 data class CapEntry(
     val address: String,
+    val device: String = "",
     val domain: String,
     val mailbox_id: String,
     val send_token: String,
@@ -116,8 +119,9 @@ data class Msg(
     var readAck: Boolean? = null,
 )
 
+/** Ein MLS-Blatt (Gerät); `ik` = Konto-Schlüssel (AIK). */
 @Serializable
-data class Member(val address: String, val ik: String)
+data class Member(val address: String, val ik: String, val device: String)
 
 @Serializable
 data class MyMailbox(val id: String, val key: String, val token: String)
@@ -135,6 +139,8 @@ data class Conversation(
     var unread: Int = 0,
     var disappearSeconds: Long = 0,
     var warning: String? = null,
+    /** Gerät wurde per Welcome aus dem eigenen Konto aufgenommen: Postfach erst ankündigen, wenn die Verzeichnisse da sind. */
+    var pendingAnnounce: Boolean? = null,
     val createdAt: Long,
 )
 
@@ -147,7 +153,7 @@ data class Contact(
 )
 
 @Serializable
-data class Me(val address: String, val domain: String, val name: String)
+data class Me(val address: String, val domain: String, val name: String, val deviceId: String, val inboxId: String)
 
 @Serializable
 data class IntroBox(val mailbox_id: String, val send_token: String, val key: String)
@@ -159,6 +165,8 @@ data class OutboxItem(val id: String, val cap: Cap, val blob: String, var tries:
 data class AppState(
     val v: Int = 1,
     val me: Me,
+    /** Backup-Datei wurde gespeichert (Pflicht nach der Registrierung). */
+    var backupDone: Boolean = false,
     var intro: IntroBox?,
     val conversations: MutableMap<String, Conversation> = mutableMapOf(),
     val contacts: MutableMap<String, Contact> = mutableMapOf(),
@@ -205,3 +213,6 @@ data class ServerInfo(
 
 /** Kontaktkarte (Link `…/#/add/<base64url>`). */
 data class ContactCard(val address: String, val cap: Cap)
+
+@Serializable
+data class DeviceInfo(val id: String, val created_at: Long, val current: Boolean)

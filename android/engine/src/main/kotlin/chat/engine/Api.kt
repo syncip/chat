@@ -20,6 +20,8 @@ class ApiException(val status: Int, message: String) : ChatException(message)
 
 interface Signer {
     val name: String
+    /** Geräte-ID (Anfragen werden mit dem Geräteschlüssel signiert). */
+    val deviceId: String
     fun sign(data: ByteArray): ByteArray
 }
 
@@ -56,7 +58,7 @@ class Api(val domain: String, private val signer: Signer? = null, val http: OkHt
         val nonce = randomBytes(12).b64()
         val msg = "CHAT-REQ-V1\n$domain\n$method\n$uri\n$ts\n$nonce\n$bodyHash"
         val sig = s.sign(msg.toByteArray()).b64()
-        return "Chat-Sig name=${s.name},ts=$ts,nonce=$nonce,sig=$sig"
+        return "Chat-Sig name=${s.name},dev=${s.deviceId},ts=$ts,nonce=$nonce,sig=$sig"
     }
 
     /** WebSocket-Auth-Nachricht (Body-Hash "WS"). */
@@ -113,6 +115,11 @@ class Api(val domain: String, private val signer: Signer? = null, val http: OkHt
     suspend fun register(json: String): String {
         val res = exec("$base/v1/register") { post(json.toRequestBody(JSON)) }
         return check(res, listOf(201))
+    }
+
+    /** Neues Gerät eines bestehenden Kontos (vom Konto-Schlüssel beglaubigt, keine Anmeldung nötig). */
+    suspend fun addDevice(json: String) {
+        check(exec("$base/v1/devices") { post(json.toRequestBody(JSON)) }, listOf(201))
     }
 
     /** Verschlüsselte Datei hochladen (Body nicht signiert, siehe PROTOCOL §11). */

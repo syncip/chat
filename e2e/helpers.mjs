@@ -15,6 +15,7 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // „insecure context“ (kein WebCrypto/Clipboard) wie bei IP:PORT-Betrieb.
 export const H = process.env.CHAT_HOST ?? 'localhost';
 export const PASS = 'correct horse battery';
+export const BACKUP_PASS = 'backup phrase 12345';
 
 export function startServer(port) {
   const dir = mkdtempSync(join(tmpdir(), 'chat-e2e-'));
@@ -42,6 +43,7 @@ export async function waitUp(port) {
   throw new Error('server did not start');
 }
 
+/** Registriert ein Konto, erfüllt die Backup-Pflicht und gibt den Pfad der Backup-Datei zurück. */
 export async function register(page, port, name, pass = PASS) {
   await page.goto(`http://${H}:${port}/`);
   await page.getByLabel('Server').fill(`${H}:${port}`);
@@ -50,6 +52,26 @@ export async function register(page, port, name, pass = PASS) {
   await page.getByLabel(/^Passphrase \(/).fill(pass);
   await page.getByLabel('Passphrase wiederholen').fill(pass);
   await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  const gate = page.getByRole('dialog', { name: 'Backup speichern' });
+  await gate.waitFor({ timeout: 30000 });
+  await gate.getByLabel(/Backup-Passphrase/).fill(BACKUP_PASS);
+  await gate.getByLabel('Wiederholen').fill(BACKUP_PASS);
+  const [dl] = await Promise.all([page.waitForEvent('download'), gate.getByRole('button', { name: 'Backup-Datei speichern' }).click()]);
+  const path = await dl.path();
+  await gate.getByRole('button', { name: /Ich habe das Backup/ }).click();
+  await page.getByText('● verbunden').waitFor({ timeout: 30000 });
+  return path;
+}
+
+/** Meldet ein weiteres Gerät mit der Backup-Datei an. */
+export async function linkDevice(page, port, backupPath, newPass = PASS) {
+  await page.goto(`http://${H}:${port}/`);
+  await page.getByRole('button', { name: /Mit Backup-Datei auf diesem Gerät anmelden/ }).click();
+  await page.locator('input[type=file]').setInputFiles(backupPath);
+  await page.getByLabel('Passphrase des Backups').fill(BACKUP_PASS);
+  await page.getByLabel(/^Neue Passphrase/).fill(newPass);
+  await page.getByLabel('Passphrase wiederholen').fill(newPass);
+  await page.getByRole('button', { name: 'Gerät anmelden' }).click();
   await page.getByText('● verbunden').waitFor({ timeout: 30000 });
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { DeviceInfo } from '../lib/types';
 import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
 import { Dialog } from './Dialog';
@@ -13,9 +14,11 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const [newBlockServer, setNewBlockServer] = useState('');
   const [newAllow, setNewAllow] = useState('');
   const [backupPass, setBackupPass] = useState('');
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const loadDevices = () => e.listDevices().then(setDevices).catch(() => undefined);
   const link = e.contactLink();
 
-  useEffect(() => { e.quota().then(setQuota).catch(() => undefined); }, [e]);
+  useEffect(() => { e.quota().then(setQuota).catch(() => undefined); void loadDevices(); }, [e]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (f: () => Promise<unknown> | unknown, ok = '') => {
     setMsg('');
     try { await f(); if (ok) setMsg(ok); } catch (x) { setMsg((x as Error).message); }
@@ -112,7 +115,21 @@ export function Settings({ onClose }: { onClose: () => void }) {
       </section>
 
       <section>
+        <h3>Geräte</h3>
+        <p className="muted small">Dein Konto kann auf mehreren Geräten gleichzeitig aktiv sein. Ein neues Gerät meldest du mit der Backup-Datei an; ein aktives Gerät nimmt es dann in deine Chats auf.</p>
+        <ul>
+          {devices.map((d) => (
+            <li key={d.id}>
+              <code>{d.id.slice(0, 8)}</code> · seit {new Date(d.created_at * 1000).toLocaleDateString()} {d.current && <strong>(dieses Gerät)</strong>}{' '}
+              {!d.current && <button className="link" onClick={() => { if (confirm('Gerät widerrufen? Es verliert Anmeldung und wird aus deinen Chats entfernt.')) void run(async () => { await e.revokeDevice(d.id); await loadDevices(); }, 'Gerät widerrufen.'); }}>widerrufen</button>}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section>
         <h3>Backup &amp; Sitzung</h3>
+        <p className="muted small">Die Backup-Datei enthält deinen Konto-Schlüssel und den aktuellen Stand deiner Einstellungen und Kontakte (keinen Nachrichtenverlauf). Speichere sie erneut, wenn sich Kontakte oder Einstellungen geändert haben.</p>
         <label>Backup-Passphrase<input type="password" value={backupPass} onChange={(x) => setBackupPass(x.target.value)} autoComplete="new-password" /></label>
         <div className="row">
           <button onClick={download}>Verschlüsseltes Backup laden</button>

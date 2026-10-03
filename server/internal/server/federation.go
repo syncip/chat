@@ -185,11 +185,22 @@ func (f *federation) deliver(ctx context.Context, domain, mailboxID, token strin
 	return resp.StatusCode, nil
 }
 
-func (f *federation) fetchKeyPackage(ctx context.Context, domain, name string) ([]byte, error) {
+func (f *federation) fetchKeyPackages(ctx context.Context, domain, name string, devices []string) ([]byte, error) {
 	if !f.allowed(domain) {
 		return nil, errors.New("not permitted")
 	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", f.base(domain)+"/v1/users/"+name+"/keypackage", nil)
+	q := ""
+	for i, d := range devices {
+		if !devRe.MatchString(d) {
+			return nil, errors.New("invalid device")
+		}
+		if i == 0 {
+			q = "?device=" + d
+		} else {
+			q += "&device=" + d
+		}
+	}
+	req, _ := http.NewRequestWithContext(ctx, "GET", f.base(domain)+"/v1/users/"+name+"/keypackages"+q, nil)
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, err

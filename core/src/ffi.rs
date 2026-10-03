@@ -30,6 +30,7 @@ pub struct AddResult {
 pub struct OpenedEnvelope {
     pub kind: u8,
     pub group_id: Vec<u8>,
+    pub sender_device: Vec<u8>,
     pub payload: Vec<u8>,
 }
 
@@ -61,9 +62,10 @@ impl MlsClient {
     pub fn create(address: String) -> R<Arc<Self>> {
         Ok(Self::wrap(mls::Client::new(&address)?))
     }
+    /// Neues Gerät für ein bestehendes Konto (AIK-Schlüsselpaar aus der Backup-Datei).
     #[uniffi::constructor]
-    pub fn from_identity(address: String, keypair: Vec<u8>) -> R<Arc<Self>> {
-        Ok(Self::wrap(mls::Client::from_identity(&address, &keypair)?))
+    pub fn link_device(address: String, keypair: Vec<u8>) -> R<Arc<Self>> {
+        Ok(Self::wrap(mls::Client::link_device(&address, &keypair)?))
     }
     #[uniffi::constructor]
     pub fn import_state(data: Vec<u8>) -> R<Arc<Self>> {
@@ -84,14 +86,34 @@ impl MlsClient {
     pub fn sign(&self, data: Vec<u8>) -> R<Vec<u8>> {
         self.with(|c| c.sign(&data))
     }
+    /// Signatur mit dem Konto-Schlüssel (Registrierung, Gerät hinzufügen).
+    pub fn sign_account(&self, data: Vec<u8>) -> R<Vec<u8>> {
+        self.with(|c| c.sign_account(&data))
+    }
+    pub fn device_id(&self) -> R<String> {
+        self.with(|c| Ok(c.device_id().to_string()))
+    }
+    pub fn device_public(&self) -> R<Vec<u8>> {
+        self.with(|c| Ok(c.device_public()))
+    }
+    pub fn device_cert(&self) -> R<Vec<u8>> {
+        self.with(|c| Ok(c.device_cert()))
+    }
+    /// JSON `{mailbox_id, token, key(hex)}`: Geräte-Postfach, aus dem AIK abgeleitet.
+    pub fn device_inbox(&self, device_id: String) -> R<String> {
+        self.with(|c| {
+            let i = c.device_inbox(&device_id)?;
+            Ok(serde_json::json!({"mailbox_id": i.mailbox_id, "token": i.token, "key": hex(&i.key)}).to_string())
+        })
+    }
     pub fn key_packages(&self, n: u32, last_resort: bool) -> R<Vec<Vec<u8>>> {
         self.with(|c| c.key_packages(n as usize, last_resort))
     }
-    /// JSON `{"address":..., "identity":"hex"}`.
+    /// JSON `{"address":..., "identity":"AIK hex", "device":...}`; prüft das Gerätezertifikat.
     pub fn key_package_identity(&self, kp: Vec<u8>) -> R<String> {
         self.with(|c| {
-            let (a, ik) = c.key_package_identity(&kp)?;
-            Ok(serde_json::json!({"address": a, "identity": hex(&ik)}).to_string())
+            let d = c.key_package_identity(&kp)?;
+            Ok(serde_json::json!({"address": d.address, "identity": hex(&d.aik), "device": d.device_id}).to_string())
         })
     }
     pub fn create_group(&self) -> R<Vec<u8>> {
@@ -105,6 +127,17 @@ impl MlsClient {
     }
     pub fn remove_members(&self, gid: Vec<u8>, addresses: Vec<String>) -> R<Vec<u8>> {
         self.with(|c| c.remove_members(&gid, &addresses))
+    }
+    /// Einzelne Geräte entfernen: JSON `[{"address":…,"device":…}]`.
+    pub fn remove_devices(&self, gid: Vec<u8>, devices_json: String) -> R<Vec<u8>> {
+        #[derive(serde::Deserialize)]
+        struct D {
+            address: String,
+            device: String,
+        }
+        let d: Vec<D> = serde_json::from_str(&devices_json).map_err(|_| bad("devices"))?;
+        let pairs: Vec<(String, String)> = d.into_iter().map(|x| (x.address, x.device)).collect();
+        self.with(|c| c.remove_devices(&gid, &pairs))
     }
     pub fn update_keys(&self, gid: Vec<u8>) -> R<Vec<u8>> {
         self.with(|c| c.update_keys(&gid))
@@ -124,9 +157,9 @@ impl MlsClient {
     pub fn process(&self, gid: Vec<u8>, message: Vec<u8>) -> R<String> {
         self.with(|c| {
             Ok(match c.process(&gid, &message)? {
-                mls::Received::Application { sender, plaintext } => {
+                mls::Received::Application { sender, sender_device, plaintext } => {
                     let env = Envelope::decode(&plaintext)?;
-                    serde_json::json!({"kind":"application","sender":sender,"envelope":env})
+                    serde_json::json!({"kind":"application","sender":sender,"senderDevice":sender_device,"envelope":env})
                 }
                 mls::Received::Commit { sender, removed_self } => {
                     serde_json::json!({"kind":"commit","sender":sender,"removedSelf":removed_self})
@@ -136,13 +169,13 @@ impl MlsClient {
             .to_string())
         })
     }
-    /// JSON-Array `[{address, identity(hex)}]`.
+    /// JSON-Array `[{address, identity(AIK hex), device}]`, ein Eintrag je Gerät.
     pub fn members(&self, gid: Vec<u8>) -> R<String> {
         self.with(|c| {
             let v: Vec<_> = c
                 .members(&gid)?
                 .into_iter()
-                .map(|(a, ik)| serde_json::json!({"address": a, "identity": hex(&ik)}))
+                .map(|m| serde_json::json!({"address": m.address, "identity": hex(&m.aik), "device": m.device_id}))
                 .collect();
             Ok(serde_json::Value::Array(v).to_string())
         })
@@ -193,14 +226,14 @@ pub fn envelope_key() -> Vec<u8> {
 }
 
 #[uniffi::export]
-pub fn envelope_seal(key: Vec<u8>, kind: u8, gid: Vec<u8>, payload: Vec<u8>) -> R<Vec<u8>> {
-    Ok(envelope::seal(&key, kind, &gid, &payload)?)
+pub fn envelope_seal(key: Vec<u8>, kind: u8, gid: Vec<u8>, dev: Vec<u8>, payload: Vec<u8>) -> R<Vec<u8>> {
+    Ok(envelope::seal(&key, kind, &gid, &dev, &payload)?)
 }
 
 #[uniffi::export]
 pub fn envelope_open(key: Vec<u8>, blob: Vec<u8>) -> R<OpenedEnvelope> {
-    let (kind, group_id, payload) = envelope::open(&key, &blob)?;
-    Ok(OpenedEnvelope { kind, group_id, payload })
+    let (kind, group_id, sender_device, payload) = envelope::open(&key, &blob)?;
+    Ok(OpenedEnvelope { kind, group_id, sender_device, payload })
 }
 
 /// Neuer Dateischlüssel (32 Byte) + Nonce (19 Byte), hintereinander.

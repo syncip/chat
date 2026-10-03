@@ -19,7 +19,7 @@ class ChatFlowTest {
         from.engine.startChat(card)
         val req = eventually("Anfrage bei ${to.name}") { to.conv { it.status == "request" } }
         to.engine.acceptRequest(req.id)
-        eventually("Chat aktiv bei ${from.name}") { from.conv { it.caps[to.address]?.intro != true && it.caps.containsKey(to.address) } }
+        eventually("Chat aktiv bei ${from.name}") { from.conv { c -> c.caps.keys.any { it.startsWith(to.address + "#") } } }
     }
 
     @Test fun `registration validation and invite rules`() = runBlocking {
@@ -133,7 +133,7 @@ class ChatFlowTest {
             // Postfach-Verzeichnis: Bob und Carol kennen sich nur über Alices Weiterleitung
             eventually("Verzeichnis vollständig") {
                 val bg = bob.conv { it.kind == "group" }!!; val cg = carol.conv { it.kind == "group" }!!
-                if (bg.caps.containsKey(carol.address) && cg.caps.containsKey(bob.address)) true else null
+                if (bg.caps.keys.any { it.startsWith(carol.address + "#") } && cg.caps.keys.any { it.startsWith(bob.address + "#") }) true else null
             }
             val bg = bob.conv { it.kind == "group" }!!.id; val cg = carol.conv { it.kind == "group" }!!.id
             bob.engine.sendMessage(bg, text = "bob an alle")
@@ -152,24 +152,65 @@ class ChatFlowTest {
         } }
     }
 
-    @Test fun `lock unlock persistence and backup restore`() = runBlocking {
+    @Test fun `lock unlock persistence`() = runBlocking {
         TestServer().use { a ->
             val alice = newClient(a, "alice"); val bob = newClient(a, "bob")
             connect(bob, alice)
             bob.engine.sendMessage(bob.conv()!!.id, text = "bleibt erhalten")
             eventually("Nachricht") { alice.conv { it.hasText("bleibt erhalten") } }
-            val backup = alice.engine.exportBackup("backup-passphrase-1")
             alice.engine.lock()
             assertEquals(Phase.Locked, alice.engine.phase.value)
             assertFailsWith<ChatException> { alice.engine.unlock("falsche passphrase!!") }
             alice.engine.unlock(PASS)
             assertTrue(alice.conv { it.hasText("bleibt erhalten") } != null, "Verlauf nach Entsperren")
-            // Wiederherstellung auf frischem Gerät (gleiches Backup-Format wie Web)
-            val e2 = Engine(FileBlobStore(java.nio.file.Files.createTempDirectory("restore").toFile()), scope = testScope)
+            listOf(alice.engine, bob.engine).forEach { it.close() }
+        }
+    }
+
+    @Test fun `second device via backup joins chats and reads writes and can be revoked`() = runBlocking {
+        TestServer().use { a ->
+            val alice = newClient(a, "alice"); val bob = newClient(a, "bob")
+            connect(bob, alice)
+            bob.engine.sendMessage(bob.conv()!!.id, text = "vor dem zweiten geraet")
+            eventually("Nachricht bei Alice") { alice.conv { it.hasText("vor dem zweiten geraet") } }
+
+            val backup = alice.engine.exportBackup("backup-passphrase-1")
+            // falsche Passphrase / kaputte Datei
+            val e2 = Engine(FileBlobStore(java.nio.file.Files.createTempDirectory("device2").toFile()), scope = testScope)
             e2.init()
-            assertFailsWith<ChatException> { e2.restoreBackup(backup, "falsch-falsch-falsch", "neue-passphrase-1") }
-            e2.restoreBackup(backup, "backup-passphrase-1", "neue-passphrase-1")
-            assertNotNull(e2.snapshot()!!.conversations.values.firstOrNull { it.hasText("bleibt erhalten") })
+            assertFailsWith<ChatException> { e2.linkDevice(backup, "falsch-falsch-falsch", "neue-passphrase-1") }
+            assertFailsWith<ChatException> { e2.linkDevice(backup.copyOf(backup.size / 2), "backup-passphrase-1", "neue-passphrase-1") }
+            e2.linkDevice(backup, "backup-passphrase-1", "neue-passphrase-1")
+            val dev2 = Client(e2, java.io.File("."), a, "alice")
+            assertEquals(2, e2.listDevices().size)
+
+            // Gerät 1 nimmt Gerät 2 automatisch in die Unterhaltung auf; der alte Verlauf bleibt unlesbar
+            val conv2 = eventually("Unterhaltung auf Gerät 2") { dev2.conv { it.kind == "dm" && it.status == "active" } }
+            assertTrue(conv2.messages.none { m -> m.parts.any { it is Part.Text && it.body.contains("vor dem") } }, "kein Verlauf vor dem Beitritt")
+            eventually("Gerät 2 hat Postfächer von Bob und Gerät 1") {
+                dev2.conv { c -> c.caps.keys.any { it.startsWith(bob.address + "#") } }
+            }
+            eventually("Bob kennt das Postfach von Gerät 2") {
+                bob.conv { c -> c.caps.keys.count { it.startsWith(alice.address + "#") } == 2 }
+            }
+
+            // Bob → beide Geräte
+            bob.engine.sendMessage(bob.conv()!!.id, text = "an beide geraete")
+            eventually("Gerät 1") { alice.conv { it.hasText("an beide geraete") } }
+            eventually("Gerät 2") { dev2.conv { it.hasText("an beide geraete") } }
+            // Gerät 2 → Bob und Gerät 1
+            e2.sendMessage(conv2.id, text = "von geraet 2")
+            eventually("Bob liest Gerät 2") { bob.conv { it.hasText("von geraet 2") } }
+            eventually("Gerät 1 sieht Nachricht von Gerät 2") { alice.conv { c -> c.messages.any { it.from == alice.address && it.parts.any { p -> p is Part.Text && p.body == "von geraet 2" } } } }
+
+            // Widerruf
+            val d2 = e2.listDevices().first { it.current }.id
+            alice.engine.revokeDevice(d2)
+            eventually("Bob entfernt Gerät 2 aus den Postfächern") { bob.conv { c -> c.members.count { it.address == alice.address } == 1 } }
+            bob.engine.sendMessage(bob.conv()!!.id, text = "nur noch geraet 1")
+            eventually("Gerät 1 liest weiter") { alice.conv { it.hasText("nur noch geraet 1") } }
+            kotlinx.coroutines.delay(2500)
+            assertTrue(dev2.conv { it.hasText("nur noch geraet 1") } == null, "widerrufenes Gerät erhält nichts mehr")
             listOf(alice.engine, bob.engine, e2).forEach { it.close() }
         }
     }

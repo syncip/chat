@@ -13,6 +13,8 @@ Android- und iOS-Clients dieselbe API und denselben Krypto-Kern nutzen können.
 - Text, Markdown-Subset, **Codeblöcke**, **Zitate**, **Dateien** (Bilder, exe/doc/… beliebig), Reaktionen, Bearbeiten, Löschen, verschwindende Nachrichten
 - Alles verschlüsselt, auch Metadaten (Dateinamen, Typen, Größen, Gruppen); Server sieht nur aufgefüllte Blobs
 - Identität = Ed25519-Schlüsselpaar, kein Telefon/E-Mail; Login per Signatur; Registrierung per Einladung
+- **Multi-Device:** mehrere Geräte gleichzeitig pro Konto, Anmeldung neuer Geräte per Backup-Datei (Pflicht nach der Registrierung)
+- Zustell-/Lesebestätigungen (pro Nutzer einstellbar, Standard aus), Einmal-Nachrichten, einklappbarer Code
 - **Föderation:** eigene Server betreiben, auf fremden Servern registrieren, serverübergreifend chatten
 - **Blockieren** (Nutzer/Server), Allowlist-Modus, Anfragen-Prinzip für Erstkontakte
 - Dateilimits (100 MB/Datei, 10 GB/Nutzer, pro Nachricht) vom Betreiber einstellbar

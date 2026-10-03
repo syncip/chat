@@ -39,6 +39,7 @@ type Config struct {
 	RatePerMinute   int
 	MaxMailboxes    int
 	MaxKeyPackages  int
+	MaxDevices      int // aktive Geräte pro Konto
 }
 
 func Load() (*Config, error) {
@@ -68,6 +69,7 @@ func Load() (*Config, error) {
 		RatePerMinute:    int(envInt("CHAT_RATE_PER_MINUTE", 600)),
 		MaxMailboxes:     int(envInt("CHAT_MAX_MAILBOXES", 5000)),
 		MaxKeyPackages:   int(envInt("CHAT_MAX_KEYPACKAGES", 200)),
+		MaxDevices:       int(envInt("CHAT_MAX_DEVICES", 10)),
 	}
 	switch c.Registration {
 	case "invite", "open", "closed":

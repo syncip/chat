@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
 import chat.engine.BlobStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -72,7 +71,8 @@ class SecureBlobStore(ctx: Context) : BlobStore {
             .build()
         return try {
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply { init(spec) }.generateKey()
-        } catch (e: StrongBoxUnavailableException) {
+        } catch (e: java.security.ProviderException) { // u. a. StrongBoxUnavailableException (erst ab API 28 als eigene Klasse)
+            if (!strongBox) throw e
             generate(strongBox = false)
         }
     }

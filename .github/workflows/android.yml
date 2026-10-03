@@ -49,5 +49,8 @@ jobs:
       - name: Debug-APK + Lint
         working-directory: android
         run: ./gradlew :app:assembleDebug :app:lintDebug
+      - name: Lint-Fehler anzeigen
+        if: failure()
+        run: grep -h -A4 "Error:" android/app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt | head -80 || true
       - uses: actions/upload-artifact@v4
         with: { name: chat-debug-apk, path: android/app/build/outputs/apk/debug/*.apk }

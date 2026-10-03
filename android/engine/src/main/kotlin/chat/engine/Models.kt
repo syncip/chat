@@ -65,7 +65,7 @@ sealed class Part {
 @JsonClassDiscriminator("kind")
 sealed class Content {
     @Serializable @SerialName("message")
-    data class Message(val parts: List<Part>) : Content()
+    data class Message(val parts: List<Part>, val once: Boolean? = null) : Content()
 
     @Serializable @SerialName("reaction")
     data class Reaction(val reference: String, val emoji: String) : Content()
@@ -76,8 +76,9 @@ sealed class Content {
     @Serializable @SerialName("delete")
     data class Delete(val reference: String) : Content()
 
-    @Serializable @SerialName("read")
-    data class Read(val reference: String) : Content()
+    /** Zustell-/Lesebestätigung (nur 1:1-Chats): receipt = "delivered" | "read". */
+    @Serializable @SerialName("receipt")
+    data class Receipt(val receipt: String, val references: List<String>) : Content()
 
     @Serializable @SerialName("disappear")
     data class Disappear(val seconds: Long) : Content()
@@ -103,11 +104,16 @@ data class Msg(
     val from: String,
     val ts: Long,
     var parts: List<Part>,
-    var status: String, // sending | sent | failed | received
+    var status: String, // sending | sent | delivered | read | failed | received
     var edited: Boolean? = null,
     var deleted: Boolean? = null,
     val reactions: MutableMap<String, MutableList<String>> = mutableMapOf(),
     val expiresAt: Long? = null,
+    /** Einmal-Nachricht: nach dem ersten Anzeigen gelöscht. */
+    val once: Boolean? = null,
+    var consumed: Boolean? = null,
+    /** Eingehend: Lesebestätigung wurde bereits gesendet. */
+    var readAck: Boolean? = null,
 )
 
 @Serializable
@@ -167,6 +173,11 @@ data class AppState(
     var directSend: Boolean = false,
     var cursor: Long = 0,
     val outbox: MutableList<OutboxItem> = mutableListOf(),
+    /** Bestätigungen senden (Standard: aus; wer sie ausschaltet, sieht die der anderen auch nicht). */
+    var sendDelivered: Boolean = false,
+    var sendRead: Boolean = false,
+    /** Einmal-Nachrichten: eigene Kopie sofort entfernen. */
+    var onceDropOwnCopy: Boolean = false,
 )
 
 @Serializable

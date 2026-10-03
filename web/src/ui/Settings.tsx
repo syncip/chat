@@ -78,6 +78,17 @@ export function Settings({ onClose }: { onClose: () => void }) {
       </section>
 
       <section>
+        <h3>Bestätigungen &amp; Einmal-Nachrichten</h3>
+        <label className="check"><input type="checkbox" checked={s.sendDelivered} onChange={(x) => e.setReceiptSettings({ sendDelivered: x.target.checked })} />
+          „Empfangen“ an Gesprächspartner senden (private Chats). Wer das ausschaltet, sieht es von anderen auch nicht.</label>
+        <label className="check"><input type="checkbox" checked={s.sendRead} onChange={(x) => e.setReceiptSettings({ sendRead: x.target.checked })} />
+          „Gelesen“ senden (private Chats). Wer das ausschaltet, sieht es von anderen auch nicht.</label>
+        <label className="check"><input type="checkbox" checked={s.onceDropOwnCopy} onChange={(x) => e.setReceiptSettings({ onceDropOwnCopy: x.target.checked })} />
+          Einmal-Nachrichten: eigene Kopie sofort entfernen (z. B. bei Kennwörtern)</label>
+        <p className="muted small">Bestätigungen verraten dem Gegenüber Zeitpunkte, deshalb sind sie standardmäßig aus. „Gesendet“ (✓) siehst du immer. Einmal-Nachrichten melden dem Absender beim Anzeigen immer „gelesen“.</p>
+      </section>
+
+      <section>
         <h3>Netzwerk</h3>
         <label className="check"><input type="checkbox" checked={s.directSend} onChange={(x) => run(() => e.setDirectSend(x.target.checked))} />
           Direkt an Empfänger-Server senden (statt über deinen Home-Server; dann sieht der Ziel-Server deine IP – ein VPN/Tor wird empfohlen)</label>

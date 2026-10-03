@@ -81,6 +81,8 @@ class Engine(
     private var backoff = 1000L
     private var saveJob: Job? = null
     private val relays = mutableListOf<Triple<String, CapEntry, String>>() // convId, entry, sender
+    private class PendingReceipt(val convId: String, val kind: String, val ids: List<String>)
+    private val receipts = mutableListOf<PendingReceipt>()
 
     private suspend fun <T> op(f: suspend () -> T): T = withContext(dispatcher) { f() }
 
@@ -402,6 +404,7 @@ class Engine(
                 val env = ChatJson.decodeFromJsonElement(Envelope.serializer(), res["envelope"]!!)
                 applyContent(conv, sender, env)
                 flushRelays()
+                flushReceipts()
             }
         }
     }
@@ -416,14 +419,25 @@ class Engine(
         when (val c = env.content) {
             is Content.Message -> {
                 if (conv.messages.any { it.id == env.id }) return
+                val once = c.once == true && conv.kind == "dm" // Einmal-Nachrichten gibt es nur in 1:1-Chats
                 val msg = Msg(
                     id = env.id, from = sender, ts = minOf(env.ts, clock() + 5 * 60_000), parts = c.parts, status = "received",
                     expiresAt = if (conv.disappearSeconds > 0) clock() + conv.disappearSeconds * 1000 else null,
+                    once = if (once) true else null,
                 )
                 conv.messages.add(msg)
                 conv.messages.sortBy { it.ts }
                 conv.unread++
                 _newMessages.tryEmit(conv.id)
+                if (conv.kind == "dm" && state!!.sendDelivered) receipts.add(PendingReceipt(conv.id, "delivered", listOf(env.id)))
+            }
+            is Content.Receipt -> {
+                if (conv.kind != "dm" || sender == state!!.me.address) return
+                val rank = mapOf("sending" to 0, "failed" to 0, "received" to 0, "sent" to 1, "delivered" to 2, "read" to 3)
+                for (ref in c.references.take(200)) {
+                    val m = conv.messages.find { it.id == ref && it.from == state!!.me.address } ?: continue
+                    if ((rank[c.receipt] ?: 0) > (rank[m.status] ?: 0)) m.status = c.receipt
+                }
             }
             is Content.Reaction -> {
                 val m = conv.messages.find { it.id == c.reference } ?: return
@@ -451,7 +465,6 @@ class Engine(
                     relays.add(Triple(conv.id, e, sender))
                 }
             }
-            is Content.Read -> {}
         }
     }
 
@@ -462,6 +475,17 @@ class Engine(
         if (e.address == sender || cur == null || cur.intro == true) {
             if (e.address != sender && conv.members.none { it.address == e.address }) return
             conv.caps[e.address] = Cap(e.domain, e.mailbox_id, e.send_token, e.key)
+        }
+    }
+
+    private suspend fun flushReceipts() {
+        val s = state!!
+        val list = receipts.toList()
+        receipts.clear()
+        for (r in list) {
+            val conv = s.conversations[r.convId] ?: continue
+            if (conv.status != "active" || conv.kind != "dm") continue
+            broadcast(conv, newEnvelope(Content.Receipt(r.kind, r.ids)))
         }
     }
 
@@ -746,10 +770,11 @@ class Engine(
 
     class Attachment(val name: String, val mime: String, val data: ByteArray)
 
-    suspend fun sendMessage(id: String, text: String? = null, code: Pair<String, String>? = null, quote: Msg? = null, files: List<Attachment> = emptyList()) = op {
+    suspend fun sendMessage(id: String, text: String? = null, code: Pair<String, String>? = null, quote: Msg? = null, files: List<Attachment> = emptyList(), once: Boolean = false) = op {
         val s = state!!
         val conv = s.conversations[id]
         if (conv == null || conv.status != "active") throw ChatException("Unterhaltung nicht aktiv.")
+        if (once && conv.kind != "dm") throw ChatException("Einmal-Nachrichten gibt es nur in privaten 1:1-Chats.")
         val lim = info?.limits
         val parts = mutableListOf<Part>()
         if (quote != null) parts.add(Part.Quote(quote.id, snippetOf(quote).take(200)))
@@ -768,15 +793,18 @@ class Engine(
         }
         for (f in files) parts.add(uploadFile(f))
         if (parts.isEmpty()) return@op
-        val env = newEnvelope(Content.Message(parts))
+        val env = newEnvelope(Content.Message(parts, if (once) true else null))
         val msg = Msg(
             id = env.id, from = s.me.address, ts = env.ts, parts = parts, status = "sending",
             expiresAt = if (conv.disappearSeconds > 0) clock() + conv.disappearSeconds * 1000 else null,
+            once = if (once) true else null,
         )
         conv.messages.add(msg)
         dirty()
         val n = broadcast(conv, env)
-        msg.status = if (n > 0) "sent" else "failed"
+        // Ein Empfangsstatus kann bereits eingetroffen sein, während wir noch auf den Server warteten.
+        if (msg.status == "sending") msg.status = if (n > 0) "sent" else "failed"
+        if (once && s.onceDropOwnCopy) { msg.parts = emptyList(); msg.consumed = true }
         dirty()
     }
 
@@ -843,8 +871,48 @@ class Engine(
     }
 
     suspend fun markRead(id: String) = op {
-        val conv = state?.conversations?.get(id) ?: return@op
-        if (conv.unread != 0) { conv.unread = 0; dirty() }
+        val s = state ?: return@op
+        val conv = s.conversations[id] ?: return@op
+        var changed = false
+        if (conv.unread != 0) { conv.unread = 0; changed = true }
+        // Lesebestätigung (nur 1:1, nur wenn eingeschaltet). Einmal-Nachrichten bestätigen erst beim Anzeigen.
+        if (s.sendRead && conv.kind == "dm" && conv.status == "active") {
+            val ids = conv.messages.filter { it.from != s.me.address && it.once != true && it.readAck != true && it.deleted != true }.map { it.id }
+            if (ids.isNotEmpty()) {
+                conv.messages.filter { it.id in ids }.forEach { it.readAck = true }
+                receipts.add(PendingReceipt(id, "read", ids))
+                flushReceipts()
+                changed = true
+            }
+        }
+        if (changed) dirty()
+    }
+
+    /**
+     * Einmal-Nachricht anzeigen: liefert den Inhalt genau einmal zurück, löscht ihn lokal sofort und meldet dem Absender „gelesen“
+     * (auch wenn Lesebestätigungen sonst aus sind: das Anzeigen ist hier der Zweck der Nachricht).
+     */
+    suspend fun revealOnce(convId: String, msgId: String): List<Part>? = op {
+        val s = state!!
+        val conv = s.conversations[convId] ?: return@op null
+        val m = conv.messages.find { it.id == msgId } ?: return@op null
+        if (m.once != true || m.consumed == true || m.from == s.me.address) return@op null
+        val parts = m.parts
+        m.parts = emptyList()
+        m.consumed = true
+        m.readAck = true
+        receipts.add(PendingReceipt(convId, "read", listOf(msgId)))
+        flushReceipts()
+        dirty()
+        parts
+    }
+
+    suspend fun setReceiptSettings(sendDelivered: Boolean? = null, sendRead: Boolean? = null, onceDropOwnCopy: Boolean? = null) = op {
+        val s = state!!
+        sendDelivered?.let { s.sendDelivered = it }
+        sendRead?.let { s.sendRead = it }
+        onceDropOwnCopy?.let { s.onceDropOwnCopy = it }
+        dirty()
     }
 
     private fun purgeExpired() {
@@ -939,6 +1007,7 @@ class Engine(
 }
 
 fun snippetOf(m: Msg): String {
+    if (m.once == true) return "🔒 Einmal-Nachricht" // nie Inhalt einer Einmal-Nachricht in Vorschau/Zitat
     for (p in m.parts) when (p) {
         is Part.Text -> return p.body
         is Part.Code -> return p.body

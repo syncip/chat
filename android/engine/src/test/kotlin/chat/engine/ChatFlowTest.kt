@@ -83,6 +83,40 @@ class ChatFlowTest {
         } }
     }
 
+    @Test fun `receipts follow settings and once messages are burned after reading`() = runBlocking {
+        TestServer().use { a ->
+            val alice = newClient(a, "alice"); val bob = newClient(a, "bob")
+            connect(bob, alice)
+            val bconv = bob.conv()!!.id; val aconv = alice.conv()!!.id
+            suspend fun sentStatus(text: String) = bob.conv()!!.messages.first { m -> m.parts.any { it is Part.Text && it.body == text } }.status
+
+            // Standard: nur „gesendet“
+            bob.engine.sendMessage(bconv, text = "erste")
+            eventually("bei Alice") { alice.conv { it.hasText("erste") } }
+            alice.engine.markRead(aconv)
+            kotlinx.coroutines.delay(1500)
+            assertEquals("sent", sentStatus("erste"))
+
+            // Alice sendet „empfangen“ und „gelesen“
+            alice.engine.setReceiptSettings(sendDelivered = true, sendRead = true)
+            bob.engine.sendMessage(bconv, text = "zweite")
+            eventually("delivered") { if (sentStatus("zweite") == "delivered" || sentStatus("zweite") == "read") true else null }
+            alice.engine.markRead(aconv)
+            eventually("read") { if (sentStatus("zweite") == "read") true else null }
+
+            // Einmal-Nachricht
+            bob.engine.sendMessage(bconv, text = "Kennwort: hunter2", once = true)
+            val msg = eventually("Einmal-Nachricht bei Alice") { alice.conv()!!.messages.firstOrNull { it.once == true } }
+            assertEquals("🔒 Einmal-Nachricht", snippetOf(msg))
+            val parts = alice.engine.revealOnce(aconv, msg.id)
+            assertTrue(parts!!.any { it is Part.Text && it.body.contains("hunter2") })
+            assertEquals(null, alice.engine.revealOnce(aconv, msg.id), "nur einmal")
+            assertTrue(alice.conv()!!.messages.first { it.id == msg.id }.parts.isEmpty())
+            eventually("Absender sieht gelesen") { if (bob.conv()!!.messages.first { it.once == true }.status == "read") true else null }
+            listOf(alice, bob).forEach { it.engine.close() }
+        }
+    }
+
     @Test fun `group across two servers and member removal`() = runBlocking {
         TestServer().use { a -> TestServer().use { b ->
             val alice = newClient(a, "alice"); val carol = newClient(a, "carol"); val bob = newClient(b, "bob")

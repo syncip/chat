@@ -2,6 +2,7 @@ import { Fragment, useState, type ReactNode } from 'react';
 import type { Msg, Part } from '../lib/types';
 import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
+import { Dialog } from './Dialog';
 
 /** Sehr kleines, sicheres Markdown-Subset: `code`, **fett**, *kursiv*, https-Links. Niemals HTML. */
 export function renderInline(text: string): ReactNode[] {
@@ -66,10 +67,70 @@ function FilePart({ p }: { p: Extract<Part, { type: 'file' }> }) {
   );
 }
 
+function CodeBlock({ p }: { p: Extract<Part, { type: 'code' }> }) {
+  const lines = p.body.split('\n').length;
+  const [open, setOpen] = useState(lines <= 10); // lange Blöcke starten eingeklappt
+  return (
+    <details className="codebox" open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary>
+        Code{p.lang ? ` · ${p.lang}` : ''} · {lines} {lines === 1 ? 'Zeile' : 'Zeilen'}
+      </summary>
+      <pre className="code" data-lang={p.lang || undefined}>
+        <code>{p.body}</code>
+        <button className="copy link" onClick={() => copyText(p.body)}>Kopieren</button>
+      </pre>
+    </details>
+  );
+}
+
+export function Parts({ parts }: { parts: Part[] }) {
+  return (
+    <>
+      {parts.map((p, i) => (
+        <Fragment key={i}>
+          {p.type === 'quote' && <blockquote>{p.snippet}</blockquote>}
+          {p.type === 'text' && <p className="text">{renderInline(p.body)}</p>}
+          {p.type === 'code' && <CodeBlock p={p} />}
+          {p.type === 'file' && <FilePart p={p} />}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+/** Statusanzeige eigener Nachrichten. Delivered/read sieht nur, wer selbst die jeweilige Bestätigung sendet. */
+export function statusLabel(m: Msg, showDelivered: boolean, showRead: boolean): string {
+  if (m.status === 'sending') return ' · sendet …';
+  if (m.status === 'failed') return ' · fehlgeschlagen';
+  let st = m.status;
+  if (st === 'read' && !showRead) st = showDelivered ? 'delivered' : 'sent';
+  if (st === 'delivered' && !showDelivered) st = 'sent';
+  return st === 'read' ? ' ✓✓ gelesen' : st === 'delivered' ? ' ✓✓ empfangen' : ' ✓ gesendet';
+}
+
+function OnceBubble({ convId, m }: { convId: string; m: Msg }) {
+  const e = useEngine();
+  const [shown, setShown] = useState<Part[] | null>(null);
+  if (m.consumed && !shown) return <div className="muted">🔒 Einmal-Nachricht gelesen</div>;
+  return (
+    <>
+      <button onClick={() => setShown(e.revealOnce(convId, m.id))}>🔒 Einmal-Nachricht anzeigen</button>
+      <div className="muted small">Wird nach dem Anzeigen gelöscht und dem Absender als gelesen gemeldet.</div>
+      {shown && (
+        <Dialog title="Einmal-Nachricht" onClose={() => setShown(null)}>
+          <Parts parts={shown} />
+          <p className="warn">Diese Nachricht ist nur jetzt sichtbar. Beim Schließen ist sie unwiderruflich gelöscht.</p>
+          <button className="primary" onClick={() => setShown(null)}>Schließen und löschen</button>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
 export function MessageView({
-  m, mine, onReply, onEdit, onDelete, onReact, quoted,
+  m, mine, onReply, onEdit, onDelete, onReact, convId, showDelivered, showRead,
 }: {
-  m: Msg; mine: boolean; quoted?: string;
+  m: Msg; mine: boolean; convId: string; showDelivered: boolean; showRead: boolean;
   onReply: () => void; onEdit: () => void; onDelete: () => void; onReact: (emoji: string) => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -78,20 +139,14 @@ export function MessageView({
     <div className={`msg ${mine ? 'mine' : ''}`}>
       <div className="bubble">
         {!mine && <div className="sender">{m.from}</div>}
-        {m.parts.map((p, i) => (
-          <Fragment key={i}>
-            {p.type === 'quote' && <blockquote title={quoted}>{p.snippet}</blockquote>}
-            {p.type === 'text' && <p className="text">{renderInline(p.body)}</p>}
-            {p.type === 'code' && (
-              <pre className="code" data-lang={p.lang || undefined}>
-                {p.lang && <span className="lang">{p.lang}</span>}
-                <code>{p.body}</code>
-                <button className="copy link" onClick={() => void copyText(p.body).catch(() => undefined)}>Kopieren</button>
-              </pre>
-            )}
-            {p.type === 'file' && <FilePart p={p} />}
-          </Fragment>
-        ))}
+        {m.once && !mine ? (
+          <OnceBubble convId={convId} m={m} />
+        ) : (
+          <>
+            {m.once && mine && <div className="muted small">🔒 Einmal-Nachricht{m.consumed ? ' (eigene Kopie entfernt)' : ''}</div>}
+            <Parts parts={m.parts} />
+          </>
+        )}
         <div className="meta">
           {Object.entries(m.reactions).map(([emo, who]) => (
             <button key={emo} className="reaction" title={who.join(', ')} onClick={() => onReact(emo)}>{emo} {who.length}</button>
@@ -100,7 +155,7 @@ export function MessageView({
             {new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             {m.edited && ' · bearbeitet'}
             {m.expiresAt && ' · ⏱'}
-            {mine && (m.status === 'sending' ? ' · sendet …' : m.status === 'failed' ? ' · fehlgeschlagen' : ' ✓')}
+            {mine && statusLabel(m, showDelivered, showRead)}
           </span>
           <button className="link small" aria-label="Aktionen" onClick={() => setMenu(!menu)}>⋯</button>
         </div>

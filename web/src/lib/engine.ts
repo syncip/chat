@@ -63,6 +63,7 @@ export class Engine {
   private lastSeq = 0;
   private backoff = 1000;
   private relays: { convId: string; entry: CapEntry; sender: string }[] = [];
+  private receipts: { convId: string; kind: 'delivered' | 'read'; ids: string[] }[] = [];
 
   subscribe = (l: Listener) => {
     this.listeners.add(l);
@@ -115,6 +116,7 @@ export class Engine {
       conversations: {}, contacts: {}, mailboxes: { [res.intro.mailbox_id]: introKey },
       blockedUsers: [], blockedServers: [], allowUsers: [], allowServers: [],
       filterMode: 'off', serverSideFilter: false, directSend: false, cursor: 0, outbox: [],
+      sendDelivered: false, sendRead: false, onceDropOwnCopy: false,
     };
     this.vault = core.Vault.create(opts.passphrase);
     await this.persist();
@@ -136,6 +138,9 @@ export class Engine {
     this.vault = vault;
     this.client = this.core.Client.importState(unb64(j.mls));
     this.state = j.app;
+    this.state.sendDelivered ??= false;
+    this.state.sendRead ??= false;
+    this.state.onceDropOwnCopy ??= false;
   }
 
   /** Backup als verschlüsselte Datei (Passphrase frei wählbar). */
@@ -398,6 +403,18 @@ export class Engine {
     if (this.isBlocked(res.sender)) return;
     this.applyContent(conv, res.sender, res.envelope);
     await this.flushRelays();
+    await this.flushReceipts();
+  }
+
+  private async flushReceipts(): Promise<void> {
+    const s = this.state!;
+    const list = this.receipts;
+    this.receipts = [];
+    for (const { convId, kind, ids } of list) {
+      const conv = s.conversations[convId];
+      if (!conv || conv.status !== 'active' || conv.kind !== 'dm') continue;
+      await this.broadcast(conv, this.newEnvelope({ kind: 'receipt', receipt: kind, references: ids }));
+    }
   }
 
   /** Postfach-Verzeichnis in Gruppen vervollständigen: neue Einträge verteilen, dem Neuen die bekannten schicken. */
@@ -436,14 +453,25 @@ export class Engine {
     switch (c.kind) {
       case 'message': {
         if (conv.messages.some((m) => m.id === env.id)) return;
+        const once = c.once === true && conv.kind === 'dm'; // Einmal-Nachrichten gibt es nur in 1:1-Chats
         const msg: Msg = {
           id: env.id, from: sender, ts: Math.min(env.ts, Date.now() + 5 * 60_000), parts: c.parts,
-          status: 'received', reactions: {},
+          status: 'received', reactions: {}, ...(once ? { once: true } : {}),
         };
         if (conv.disappearSeconds > 0) msg.expiresAt = Date.now() + conv.disappearSeconds * 1000;
         conv.messages.push(msg);
         conv.messages.sort((a, b) => a.ts - b.ts);
         conv.unread++;
+        if (conv.kind === 'dm' && s.sendDelivered) this.receipts.push({ convId: conv.id, kind: 'delivered', ids: [env.id] });
+        break;
+      }
+      case 'receipt': {
+        if (conv.kind !== 'dm' || sender === s.me.address) break;
+        const rank = { sending: 0, failed: 0, received: 0, sent: 1, delivered: 2, read: 3 } as const;
+        for (const ref of c.references.slice(0, 200)) {
+          const m = conv.messages.find((x) => x.id === ref && x.from === s.me.address);
+          if (m && rank[c.receipt] > rank[m.status]) m.status = c.receipt;
+        }
         break;
       }
       case 'reaction': {
@@ -489,10 +517,7 @@ export class Engine {
           }
         }
         break;
-      case 'read':
-        break;
     }
-    void s;
   }
 
   /** Caps nur vom Besitzer selbst überschreibbar; für andere gilt „first write wins“ (kein Umleiten durch Dritte). */
@@ -799,11 +824,12 @@ export class Engine {
 
   async sendMessage(
     id: string,
-    o: { text?: string; code?: { lang: string; body: string }; quote?: Msg; files?: File[] },
+    o: { text?: string; code?: { lang: string; body: string }; quote?: Msg; files?: File[]; once?: boolean },
   ): Promise<void> {
     const s = this.state!;
     const conv = s.conversations[id];
     if (!conv || conv.status !== 'active') throw new Error('Unterhaltung nicht aktiv.');
+    if (o.once && conv.kind !== 'dm') throw new Error('Einmal-Nachrichten gibt es nur in privaten 1:1-Chats.');
     const lim = this.info?.limits;
     const parts: Part[] = [];
     if (o.quote) parts.push({ type: 'quote', reference: o.quote.id, snippet: snippetOf(o.quote).slice(0, 200) });
@@ -823,13 +849,18 @@ export class Engine {
     }
     for (const f of files) parts.push(await this.uploadFile(f));
     if (parts.length === 0) return;
-    const env = this.newEnvelope({ kind: 'message', parts });
-    const msg: Msg = { id: env.id, from: s.me.address, ts: env.ts, parts, status: 'sending', reactions: {} };
+    const env = this.newEnvelope({ kind: 'message', parts, ...(o.once ? { once: true } : {}) });
+    const msg: Msg = { id: env.id, from: s.me.address, ts: env.ts, parts, status: 'sending', reactions: {}, ...(o.once ? { once: true } : {}) };
     if (conv.disappearSeconds > 0) msg.expiresAt = Date.now() + conv.disappearSeconds * 1000;
     conv.messages.push(msg);
     this.dirty();
     const n = await this.broadcast(conv, env);
-    msg.status = n > 0 ? 'sent' : 'failed';
+    // Ein Empfangsstatus (delivered/read) kann bereits eingetroffen sein, während wir noch auf den Server warteten.
+    if (msg.status === 'sending') msg.status = n > 0 ? 'sent' : 'failed';
+    if (o.once && s.onceDropOwnCopy) {
+      msg.parts = [];
+      msg.consumed = true;
+    }
     this.dirty();
   }
 
@@ -899,11 +930,52 @@ export class Engine {
   }
 
   markRead(id: string): void {
-    const conv = this.state?.conversations[id];
-    if (conv && conv.unread) {
+    const s = this.state;
+    const conv = s?.conversations[id];
+    if (!s || !conv) return;
+    let changed = false;
+    if (conv.unread) {
       conv.unread = 0;
-      this.dirty();
+      changed = true;
     }
+    // Lesebestätigung (nur 1:1, nur wenn eingeschaltet). Einmal-Nachrichten bestätigen erst beim Anzeigen.
+    if (s.sendRead && conv.kind === 'dm' && conv.status === 'active') {
+      const ids = conv.messages.filter((m) => m.from !== s.me.address && !m.once && !m.readAck && !m.deleted).map((m) => m.id);
+      if (ids.length) {
+        for (const m of conv.messages) if (ids.includes(m.id)) m.readAck = true;
+        this.receipts.push({ convId: id, kind: 'read', ids });
+        this.enqueue(() => this.flushReceipts());
+        changed = true;
+      }
+    }
+    if (changed) this.dirty();
+  }
+
+  /**
+   * Einmal-Nachricht anzeigen: liefert den Inhalt genau einmal zurück, löscht ihn lokal sofort und meldet dem Absender „gelesen“
+   * (auch wenn Lesebestätigungen sonst ausgeschaltet sind – das Anzeigen ist hier der Zweck der Nachricht).
+   */
+  revealOnce(convId: string, msgId: string): Part[] | null {
+    const s = this.state!;
+    const conv = s.conversations[convId];
+    const m = conv?.messages.find((x) => x.id === msgId);
+    if (!conv || !m || !m.once || m.consumed || m.from === s.me.address) return null;
+    const parts = m.parts;
+    m.parts = [];
+    m.consumed = true;
+    m.readAck = true;
+    this.receipts.push({ convId, kind: 'read', ids: [msgId] });
+    this.enqueue(() => this.flushReceipts());
+    this.dirty();
+    return parts;
+  }
+
+  setReceiptSettings(o: { sendDelivered?: boolean; sendRead?: boolean; onceDropOwnCopy?: boolean }): void {
+    const s = this.state!;
+    if (o.sendDelivered !== undefined) s.sendDelivered = o.sendDelivered;
+    if (o.sendRead !== undefined) s.sendRead = o.sendRead;
+    if (o.onceDropOwnCopy !== undefined) s.onceDropOwnCopy = o.onceDropOwnCopy;
+    this.dirty();
   }
 
   private purgeExpired(): void {
@@ -1025,6 +1097,7 @@ export class Engine {
 }
 
 export function snippetOf(m: Msg): string {
+  if (m.once) return '🔒 Einmal-Nachricht'; // nie Inhalt einer Einmal-Nachricht in Vorschau/Zitat
   for (const p of m.parts) {
     if (p.type === 'text') return p.body;
     if (p.type === 'code') return p.body;

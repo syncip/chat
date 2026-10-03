@@ -74,3 +74,4 @@ code { background: var(--bg); padding: 0 4px; border-radius: 4px; } pre code { b
 .transport-warning { grid-column: 1 / -1; background: var(--warn); color: #000; padding: 6px 12px; font-size: 13px; }
 .layout.with-warning { grid-template-rows: auto 1fr; height: 100%; }
 .layout.with-warning > .sidebar, .layout.with-warning > main { min-height: 0; }
+.codebox { margin: 4px 0; } .codebox > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 2px 0; }

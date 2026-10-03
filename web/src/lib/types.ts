@@ -28,11 +28,11 @@ export interface CapEntry extends Cap {
 }
 
 export type Content =
-  | { kind: 'message'; parts: Part[] }
+  | { kind: 'message'; parts: Part[]; once?: boolean }
   | { kind: 'reaction'; reference: string; emoji: string }
   | { kind: 'edit'; reference: string; parts: Part[] }
   | { kind: 'delete'; reference: string }
-  | { kind: 'read'; reference: string }
+  | { kind: 'receipt'; receipt: 'delivered' | 'read'; references: string[] }
   | { kind: 'disappear'; seconds: number }
   | { kind: 'directory'; entries: CapEntry[] }
   | { kind: 'group_name'; name: string };
@@ -49,7 +49,13 @@ export interface Msg {
   from: string;
   ts: number;
   parts: Part[];
-  status: 'sending' | 'sent' | 'failed' | 'received';
+  /** Eigene Nachrichten: sending → sent (Server hat angenommen) → delivered → read. */
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'received';
+  /** Einmal-Nachricht: nach dem ersten Anzeigen gelöscht. */
+  once?: boolean;
+  consumed?: boolean;
+  /** Eingehend: Lesebestätigung wurde bereits gesendet. */
+  readAck?: boolean;
   edited?: boolean;
   deleted?: boolean;
   reactions: Record<string, string[]>;
@@ -97,6 +103,11 @@ export interface AppState {
   directSend: boolean;
   cursor: number;
   outbox: { id: string; cap: Cap; blob: string; tries: number }[];
+  /** Bestätigungen senden (Standard: aus; wer sie ausschaltet, sieht die der anderen auch nicht). */
+  sendDelivered: boolean;
+  sendRead: boolean;
+  /** Einmal-Nachrichten: eigene Kopie sofort entfernen. */
+  onceDropOwnCopy: boolean;
 }
 
 export interface ServerInfo {

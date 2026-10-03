@@ -11,6 +11,7 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
   const me = e.state!.me.address;
   const [text, setText] = useState('');
   const [codeMode, setCodeMode] = useState(false);
+  const [once, setOnce] = useState(false);
   const [lang, setLang] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [reply, setReply] = useState<Msg | null>(null);
@@ -36,12 +37,14 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
           code: codeMode ? { lang, body: text } : undefined,
           quote: reply ?? undefined,
           files,
+          once: once && conv.kind === 'dm',
         });
       }
       setText('');
       setFiles([]);
       setReply(null);
       setCodeMode(false);
+      setOnce(false);
     } catch (x) {
       setErr((x as Error).message);
     } finally {
@@ -64,7 +67,7 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
               {conv.kind === 'dm' && <button onClick={async () => { await e.declineRequest(conv.id); await e.blockUser(conv.members.find((m) => m.address !== me)!.address); onClosed(); }}>Blockieren</button>}
             </div>
           </div>
-          {conv.messages.map((m) => <MessageView key={m.id} m={m} mine={false} onReply={() => {}} onEdit={() => {}} onDelete={() => {}} onReact={() => {}} />)}
+          {conv.messages.map((m) => <MessageView key={m.id} m={m} mine={false} convId={conv.id} showDelivered={false} showRead={false} onReply={() => {}} onEdit={() => {}} onDelete={() => {}} onReact={() => {}} />)}
         </div>
       </div>
     );
@@ -78,8 +81,8 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
       <div className="messages">
         {conv.messages.map((m) => (
           <MessageView
-            key={m.id} m={m} mine={m.from === me}
-            quoted={undefined}
+            key={m.id} m={m} mine={m.from === me} convId={conv.id}
+            showDelivered={e.state!.sendDelivered} showRead={e.state!.sendRead}
             onReply={() => setReply(m)}
             onEdit={() => { setEditing(m); setText(m.parts.find((p) => p.type === 'text')?.body ?? ''); setCodeMode(false); }}
             onDelete={() => e.deleteMessage(conv.id, m.id)}
@@ -102,6 +105,7 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
             <button title="Datei anhängen" onClick={() => fileInput.current?.click()} disabled={!!editing}>📎</button>
             <input ref={fileInput} type="file" multiple hidden onChange={(x) => { setFiles([...files, ...Array.from(x.target.files ?? [])]); x.target.value = ''; }} />
             <button title="Codeblock" className={codeMode ? 'on' : ''} onClick={() => setCodeMode(!codeMode)} disabled={!!editing}>{'</>'}</button>
+            {conv.kind === 'dm' && <button title="Einmal-Nachricht (nach dem Lesen gelöscht)" className={once ? 'on' : ''} onClick={() => setOnce(!once)} disabled={!!editing}>🔒</button>}
             {codeMode && <input className="lang" placeholder="Sprache" value={lang} onChange={(x) => setLang(x.target.value)} />}
             <textarea
               value={text} rows={codeMode ? 6 : 2} className={codeMode ? 'mono' : ''}

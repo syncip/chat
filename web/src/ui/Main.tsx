@@ -99,11 +99,12 @@ export function Main() {
   );
 }
 
-function preview(c: { messages: { parts: { type: string; body?: string; name?: string }[]; deleted?: boolean }[]; status: string }): string {
+function preview(c: { messages: { parts: { type: string; body?: string; name?: string }[]; deleted?: boolean; once?: boolean }[]; status: string }): string {
   if (c.status === 'left') return 'Verlassen';
   const m = c.messages.at(-1);
   if (!m) return '';
   if (m.deleted) return 'Nachricht gelöscht';
+  if (m.once) return '🔒 Einmal-Nachricht';
   const p = m.parts.find((x) => x.type === 'text' || x.type === 'code' || x.type === 'file');
   if (!p) return '';
   return p.type === 'file' ? `📎 ${p.name}` : (p.body ?? '').slice(0, 60);

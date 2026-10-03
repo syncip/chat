@@ -77,3 +77,11 @@ export async function send(page, text) {
 }
 
 export const seen = (page, text) => page.locator('.messages p.text', { hasText: text }).first().waitFor({ timeout: 25000 });
+
+/** Chat mit dem Besitzer eines Kontaktlinks starten (Gegenseite nimmt selbst an). */
+export async function connectToLink(from, link) {
+  await from.getByTitle('Neuer Chat').click();
+  await from.getByPlaceholder('https://…/#/add/…').fill(link);
+  await from.getByRole('button', { name: 'Chat starten' }).click();
+  await from.locator('.chat-header').waitFor({ timeout: 30000 });
+}

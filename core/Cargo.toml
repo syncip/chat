@@ -22,6 +22,7 @@ sha2 = "0.10"
 rand = "0.8"
 getrandom = { version = "0.2", features = ["js"] }
 wasm-bindgen = "0.2"
+uniffi = { version = "0.29", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
@@ -30,3 +31,12 @@ js-sys = "0.3"
 opt-level = "s"
 lto = true
 panic = "abort"
+
+[features]
+uniffi = ["dep:uniffi"]
+uniffi-cli = ["uniffi", "uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["uniffi-cli"]

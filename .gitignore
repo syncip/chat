@@ -6,3 +6,11 @@ dist/
 /data/
 .env
 web/src/wasm/
+
+android/.gradle/
+android/**/build/
+android/local.properties
+android/.kotlin/
+*.keystore
+*.jks
+google-services.json

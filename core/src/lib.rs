@@ -11,3 +11,8 @@ pub mod vault;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
+
+#[cfg(feature = "uniffi")]
+pub mod ffi;
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();

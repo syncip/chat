@@ -38,7 +38,11 @@ pub struct MemberInfo {
 #[derive(Debug)]
 pub enum Received {
     /// Entschlüsselter, entpolsterter Anwendungs-Payload.
-    Application { sender: String, sender_device: String, plaintext: Vec<u8> },
+    Application {
+        sender: String,
+        sender_device: String,
+        plaintext: Vec<u8>,
+    },
     /// Ein Commit wurde angewendet (Mitglieder/Epoche geändert). `removed_self`: dieses Gerät wurde entfernt.
     Commit { sender: String, removed_self: bool },
     /// Proposal gespeichert, wartet auf Commit.
@@ -61,7 +65,10 @@ fn group_config() -> MlsGroupCreateConfig {
 }
 
 fn join_config() -> MlsGroupJoinConfig {
-    MlsGroupJoinConfig::builder().use_ratchet_tree_extension(true).max_past_epochs(5).build()
+    MlsGroupJoinConfig::builder()
+        .use_ratchet_tree_extension(true)
+        .max_past_epochs(5)
+        .build()
 }
 
 fn new_keypair() -> Result<SignatureKeyPair> {
@@ -69,11 +76,17 @@ fn new_keypair() -> Result<SignatureKeyPair> {
 }
 
 fn credential_identity(c: &Credential) -> Result<Vec<u8>> {
-    BasicCredential::try_from(c.clone()).map(|b| b.identity().to_vec()).map_err(|_| Error::Invalid("credential type"))
+    BasicCredential::try_from(c.clone())
+        .map(|b| b.identity().to_vec())
+        .map_err(|_| Error::Invalid("credential type"))
 }
 
 impl Client {
-    fn build(provider: OpenMlsRustCrypto, account: SignatureKeyPair, address: &str) -> Result<Self> {
+    fn build(
+        provider: OpenMlsRustCrypto,
+        account: SignatureKeyPair,
+        address: &str,
+    ) -> Result<Self> {
         let device = new_keypair()?;
         device.store(provider.storage()).map_err(mls)?;
         let mut id = [0u8; 8];
@@ -82,7 +95,14 @@ impl Client {
         let cert_sig = account
             .sign(&device::cert_message(address, &device_id, device.public()))
             .map_err(|_| Error::Crypto("sign"))?;
-        Ok(Self { provider, account, device, device_id, cert_sig, address: address.to_string() })
+        Ok(Self {
+            provider,
+            account,
+            device,
+            device_id,
+            cert_sig,
+            address: address.to_string(),
+        })
     }
 
     /// Neues Konto: frischer AIK und erstes Gerät.
@@ -142,7 +162,12 @@ impl Client {
     }
 
     fn credential(&self) -> CredentialWithKey {
-        let identity = device::encode_credential(&self.address, self.account.public(), &self.device_id, &self.cert_sig);
+        let identity = device::encode_credential(
+            &self.address,
+            self.account.public(),
+            &self.device_id,
+            &self.cert_sig,
+        );
         CredentialWithKey {
             credential: BasicCredential::new(identity).into(),
             signature_key: self.device.public().into(),
@@ -157,7 +182,9 @@ impl Client {
             if last_resort {
                 b = b.mark_as_last_resort();
             }
-            let bundle = b.build(CIPHERSUITE, &self.provider, &self.device, self.credential()).map_err(mls)?;
+            let bundle = b
+                .build(CIPHERSUITE, &self.provider, &self.device, self.credential())
+                .map_err(mls)?;
             out.push(bundle.key_package().tls_serialize_detached().map_err(mls)?);
         }
         Ok(out)
@@ -179,7 +206,13 @@ impl Client {
 
     /// Neue Gruppe; gibt die Gruppen-ID zurück.
     pub fn create_group(&mut self) -> Result<Vec<u8>> {
-        let g = MlsGroup::new(&self.provider, &self.device, &group_config(), self.credential()).map_err(mls)?;
+        let g = MlsGroup::new(
+            &self.provider,
+            &self.device,
+            &group_config(),
+            self.credential(),
+        )
+        .map_err(mls)?;
         Ok(g.group_id().as_slice().to_vec())
     }
 
@@ -195,7 +228,15 @@ impl Client {
             .map(|m| {
                 let id = credential_identity(&m.credential)?;
                 let d = device::verify_credential(&id, &m.signature_key)?;
-                Ok((m.index, id, MemberInfo { address: d.address, aik: d.aik, device_id: d.device_id }))
+                Ok((
+                    m.index,
+                    id,
+                    MemberInfo {
+                        address: d.address,
+                        aik: d.aik,
+                        device_id: d.device_id,
+                    },
+                ))
             })
             .collect()
     }
@@ -207,7 +248,9 @@ impl Client {
             self.key_package_identity(b)?; // ungültige Zertifikate werden nie hinzugefügt
             kps.push(self.parse_key_package(b)?);
         }
-        let (commit, welcome, _) = g.add_members(&self.provider, &self.device, &kps).map_err(mls)?;
+        let (commit, welcome, _) = g
+            .add_members(&self.provider, &self.device, &kps)
+            .map_err(mls)?;
         g.merge_pending_commit(&self.provider).map_err(mls)?;
         Ok(AddResult {
             commit: commit.tls_serialize_detached().map_err(mls)?,
@@ -217,30 +260,41 @@ impl Client {
 
     fn remove_leaves(&mut self, gid: &[u8], pred: impl Fn(&MemberInfo) -> bool) -> Result<Vec<u8>> {
         let mut g = self.load(gid)?;
-        let idx: Vec<LeafNodeIndex> =
-            Self::validated_members(&g)?.into_iter().filter(|(_, _, m)| pred(m)).map(|(i, _, _)| i).collect();
+        let idx: Vec<LeafNodeIndex> = Self::validated_members(&g)?
+            .into_iter()
+            .filter(|(_, _, m)| pred(m))
+            .map(|(i, _, _)| i)
+            .collect();
         if idx.is_empty() {
             return Err(Error::Invalid("no such member"));
         }
-        let (commit, _, _) = g.remove_members(&self.provider, &self.device, &idx).map_err(mls)?;
+        let (commit, _, _) = g
+            .remove_members(&self.provider, &self.device, &idx)
+            .map_err(mls)?;
         g.merge_pending_commit(&self.provider).map_err(mls)?;
         commit.tls_serialize_detached().map_err(mls)
     }
 
     /// Alle Geräte der Konten mit diesen Adressen entfernen; gibt den Commit zurück.
     pub fn remove_members(&mut self, gid: &[u8], addresses: &[String]) -> Result<Vec<u8>> {
-        self.remove_leaves(gid, |m| addresses.iter().any(|a| *a == m.address))
+        self.remove_leaves(gid, |m| addresses.contains(&m.address))
     }
 
     /// Einzelne Geräte entfernen (z. B. widerrufene Geräte des eigenen Kontos).
     pub fn remove_devices(&mut self, gid: &[u8], devices: &[(String, String)]) -> Result<Vec<u8>> {
-        self.remove_leaves(gid, |m| devices.iter().any(|(a, d)| *a == m.address && *d == m.device_id))
+        self.remove_leaves(gid, |m| {
+            devices
+                .iter()
+                .any(|(a, d)| *a == m.address && *d == m.device_id)
+        })
     }
 
     /// Eigenen Schlüssel erneuern (Post-Compromise Security); gibt den Commit zurück.
     pub fn update_keys(&mut self, gid: &[u8]) -> Result<Vec<u8>> {
         let mut g = self.load(gid)?;
-        let b = g.self_update(&self.provider, &self.device, LeafNodeParameters::default()).map_err(mls)?;
+        let b = g
+            .self_update(&self.provider, &self.device, LeafNodeParameters::default())
+            .map_err(mls)?;
         g.merge_pending_commit(&self.provider).map_err(mls)?;
         b.0.tls_serialize_detached().map_err(mls)
     }
@@ -256,8 +310,17 @@ impl Client {
         // in einer Kopie des Speichers beitreten und prüfen.
         let probe = OpenMlsRustCrypto::default();
         {
-            let src = self.provider.storage().values.read().map_err(|_| Error::Crypto("lock"))?;
-            let mut dst = probe.storage().values.write().map_err(|_| Error::Crypto("lock"))?;
+            let src = self
+                .provider
+                .storage()
+                .values
+                .read()
+                .map_err(|_| Error::Crypto("lock"))?;
+            let mut dst = probe
+                .storage()
+                .values
+                .write()
+                .map_err(|_| Error::Crypto("lock"))?;
             dst.clone_from(&src);
         }
         let probe_group = StagedWelcome::new_from_welcome(&probe, &join_config(), w.clone(), None)
@@ -265,7 +328,10 @@ impl Client {
             .into_group(&probe)
             .map_err(mls)?;
         let probe_gid = probe_group.group_id().clone();
-        if MlsGroup::load(self.provider.storage(), &probe_gid).map_err(mls)?.is_some() {
+        if MlsGroup::load(self.provider.storage(), &probe_gid)
+            .map_err(mls)?
+            .is_some()
+        {
             return Err(Error::Invalid("group already exists"));
         }
         // Alle Mitglieds-Zertifikate prüfen, bevor wir dem Zustand vertrauen.
@@ -280,7 +346,9 @@ impl Client {
     /// Payload auffüllen und verschlüsseln.
     pub fn encrypt(&mut self, gid: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
         let mut g = self.load(gid)?;
-        let out = g.create_message(&self.provider, &self.device, &pad(plaintext)).map_err(mls)?;
+        let out = g
+            .create_message(&self.provider, &self.device, &pad(plaintext))
+            .map_err(mls)?;
         out.tls_serialize_detached().map_err(mls)
     }
 
@@ -291,10 +359,14 @@ impl Client {
         let proto = msg.try_into_protocol_message().map_err(mls)?;
         let processed = g.process_message(&self.provider, proto).map_err(mls)?;
         let sender = match processed.sender() {
-            Sender::Member(i) => before.iter().find(|(idx, _, _)| idx == i).map(|(_, _, m)| m.clone()),
+            Sender::Member(i) => before
+                .iter()
+                .find(|(idx, _, _)| idx == i)
+                .map(|(_, _, m)| m.clone()),
             _ => None,
         };
-        let (sender_addr, sender_dev) = sender.map(|m| (m.address, m.device_id)).unwrap_or_default();
+        let (sender_addr, sender_dev) =
+            sender.map(|m| (m.address, m.device_id)).unwrap_or_default();
         match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(m) => Ok(Received::Application {
                 sender: sender_addr,
@@ -303,7 +375,10 @@ impl Client {
             }),
             ProcessedMessageContent::StagedCommitMessage(c) => {
                 let removed_self = c.self_removed();
-                let removed: Vec<LeafNodeIndex> = c.remove_proposals().map(|q| q.remove_proposal().removed()).collect();
+                let removed: Vec<LeafNodeIndex> = c
+                    .remove_proposals()
+                    .map(|q| q.remove_proposal().removed())
+                    .collect();
                 g.merge_staged_commit(&self.provider, *c).map_err(mls)?;
                 if !removed_self {
                     // Zertifikate aller Blätter prüfen; ein Blatt darf seine Identität nicht ändern (außer nach Entfernen).
@@ -322,10 +397,14 @@ impl Client {
                         return Err(e);
                     }
                 }
-                Ok(Received::Commit { sender: sender_addr, removed_self })
+                Ok(Received::Commit {
+                    sender: sender_addr,
+                    removed_self,
+                })
             }
             ProcessedMessageContent::ProposalMessage(p) => {
-                g.store_pending_proposal(self.provider.storage(), *p).map_err(mls)?;
+                g.store_pending_proposal(self.provider.storage(), *p)
+                    .map_err(mls)?;
                 Ok(Received::Proposal)
             }
             ProcessedMessageContent::ExternalJoinProposalMessage(_) => {
@@ -337,7 +416,10 @@ impl Client {
     /// Mitglieder (ein Eintrag je Gerät/Blatt), Zertifikate geprüft.
     pub fn members(&self, gid: &[u8]) -> Result<Vec<MemberInfo>> {
         let g = self.load(gid)?;
-        Ok(Self::validated_members(&g)?.into_iter().map(|(_, _, m)| m).collect())
+        Ok(Self::validated_members(&g)?
+            .into_iter()
+            .map(|(_, _, m)| m)
+            .collect())
     }
 
     /// Gruppe lokal löschen (z. B. nach Entfernung).
@@ -348,11 +430,22 @@ impl Client {
 
     /// Serialisiert den kompletten Zustand dieses Geräts (Schlüsselmaterial! nur verschlüsselt speichern, siehe `vault`).
     pub fn export_state(&self) -> Result<Vec<u8>> {
-        let values = self.provider.storage().values.read().map_err(|_| Error::Crypto("lock"))?;
+        let values = self
+            .provider
+            .storage()
+            .values
+            .read()
+            .map_err(|_| Error::Crypto("lock"))?;
         let mut out = Vec::new();
         let account = self.export_identity()?;
         let device = self.device.tls_serialize_detached().map_err(mls)?;
-        for part in [self.address.as_bytes(), account.as_slice(), device.as_slice(), self.device_id.as_bytes(), self.cert_sig.as_slice()] {
+        for part in [
+            self.address.as_bytes(),
+            account.as_slice(),
+            device.as_slice(),
+            self.device_id.as_bytes(),
+            self.cert_sig.as_slice(),
+        ] {
             out.extend_from_slice(&(part.len() as u32).to_be_bytes());
             out.extend_from_slice(part);
         }
@@ -368,15 +461,21 @@ impl Client {
 
     pub fn import_state(data: &[u8]) -> Result<Self> {
         let mut r = Reader(data);
-        let address = String::from_utf8(r.bytes()?.to_vec()).map_err(|_| Error::Invalid("state"))?;
+        let address =
+            String::from_utf8(r.bytes()?.to_vec()).map_err(|_| Error::Invalid("state"))?;
         let account = SignatureKeyPair::tls_deserialize_exact(r.bytes()?).map_err(mls)?;
         let device = SignatureKeyPair::tls_deserialize_exact(r.bytes()?).map_err(mls)?;
-        let device_id = String::from_utf8(r.bytes()?.to_vec()).map_err(|_| Error::Invalid("state"))?;
+        let device_id =
+            String::from_utf8(r.bytes()?.to_vec()).map_err(|_| Error::Invalid("state"))?;
         let cert_sig = r.bytes()?.to_vec();
         let n = r.u32()? as usize;
         let provider = OpenMlsRustCrypto::default();
         {
-            let mut values = provider.storage().values.write().map_err(|_| Error::Crypto("lock"))?;
+            let mut values = provider
+                .storage()
+                .values
+                .write()
+                .map_err(|_| Error::Crypto("lock"))?;
             for _ in 0..n {
                 let k = r.bytes()?.to_vec();
                 let v = r.bytes()?.to_vec();
@@ -387,7 +486,14 @@ impl Client {
         if !device::valid_device_id(&device_id) {
             return Err(Error::Invalid("state"));
         }
-        Ok(Self { provider, account, device, device_id, cert_sig, address })
+        Ok(Self {
+            provider,
+            account,
+            device,
+            device_id,
+            cert_sig,
+            address,
+        })
     }
 }
 

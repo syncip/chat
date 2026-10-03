@@ -46,9 +46,14 @@ impl FileEncryptor {
         }
         let enc = self.0.as_mut().ok_or(Error::Invalid("finished"))?;
         if last {
-            self.0.take().unwrap().encrypt_last(chunk).map_err(|_| Error::Crypto("encrypt"))
+            self.0
+                .take()
+                .unwrap()
+                .encrypt_last(chunk)
+                .map_err(|_| Error::Crypto("encrypt"))
         } else {
-            enc.encrypt_next(chunk).map_err(|_| Error::Crypto("encrypt"))
+            enc.encrypt_next(chunk)
+                .map_err(|_| Error::Crypto("encrypt"))
         }
     }
 }
@@ -70,9 +75,14 @@ impl FileDecryptor {
         }
         let dec = self.0.as_mut().ok_or(Error::Invalid("finished"))?;
         if last {
-            self.0.take().unwrap().decrypt_last(chunk).map_err(|_| Error::Crypto("decrypt"))
+            self.0
+                .take()
+                .unwrap()
+                .decrypt_last(chunk)
+                .map_err(|_| Error::Crypto("decrypt"))
         } else {
-            dec.decrypt_next(chunk).map_err(|_| Error::Crypto("decrypt"))
+            dec.decrypt_next(chunk)
+                .map_err(|_| Error::Crypto("decrypt"))
         }
     }
 }

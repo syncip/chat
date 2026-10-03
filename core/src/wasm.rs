@@ -19,7 +19,9 @@ impl Client {
     /// Neues Gerät für ein bestehendes Konto (AIK-Schlüsselpaar aus der Backup-Datei).
     #[wasm_bindgen(js_name = linkDevice)]
     pub fn link_device(address: &str, keypair: &[u8]) -> Result<Client, JsError> {
-        mls::Client::link_device(address, keypair).map(Client).map_err(js)
+        mls::Client::link_device(address, keypair)
+            .map(Client)
+            .map_err(js)
     }
     #[wasm_bindgen(js_name = importState)]
     pub fn import_state(data: &[u8]) -> Result<Client, JsError> {
@@ -57,7 +59,10 @@ impl Client {
     #[wasm_bindgen(js_name = deviceInbox)]
     pub fn device_inbox(&self, device_id: &str) -> Result<String, JsError> {
         let i = self.0.device_inbox(device_id).map_err(js)?;
-        Ok(serde_json::json!({"mailbox_id": i.mailbox_id, "token": i.token, "key": hex(&i.key)}).to_string())
+        Ok(
+            serde_json::json!({"mailbox_id": i.mailbox_id, "token": i.token, "key": hex(&i.key)})
+                .to_string(),
+        )
     }
     #[wasm_bindgen(js_name = identityPublic)]
     pub fn identity_public(&self) -> Vec<u8> {
@@ -71,7 +76,9 @@ impl Client {
     #[wasm_bindgen(js_name = keyPackages)]
     pub fn key_packages(&self, n: usize, last_resort: bool) -> Result<js_sys::Array, JsError> {
         let v = self.0.key_packages(n, last_resort).map_err(js)?;
-        Ok(v.into_iter().map(|b| js_sys::Uint8Array::from(&b[..])).collect())
+        Ok(v.into_iter()
+            .map(|b| js_sys::Uint8Array::from(&b[..]))
+            .collect())
     }
     /// JSON `{address, identity, device}` (identity = AIK hex). Prüft das Gerätezertifikat.
     #[wasm_bindgen(js_name = keyPackageIdentity)]
@@ -85,8 +92,15 @@ impl Client {
     }
     /// JSON `{commit, welcome}` (base64-frei: Uint8Array-Paar als Array).
     #[wasm_bindgen(js_name = addMembers)]
-    pub fn add_members(&mut self, gid: &[u8], kps: js_sys::Array) -> Result<js_sys::Array, JsError> {
-        let kps: Vec<Vec<u8>> = kps.iter().map(|v| js_sys::Uint8Array::new(&v).to_vec()).collect();
+    pub fn add_members(
+        &mut self,
+        gid: &[u8],
+        kps: js_sys::Array,
+    ) -> Result<js_sys::Array, JsError> {
+        let kps: Vec<Vec<u8>> = kps
+            .iter()
+            .map(|v| js_sys::Uint8Array::new(&v).to_vec())
+            .collect();
         let r = self.0.add_members(gid, &kps).map_err(js)?;
         Ok(js_sys::Array::of2(
             &js_sys::Uint8Array::from(&r.commit[..]),
@@ -94,7 +108,11 @@ impl Client {
         ))
     }
     #[wasm_bindgen(js_name = removeMembers)]
-    pub fn remove_members(&mut self, gid: &[u8], addresses: Vec<String>) -> Result<Vec<u8>, JsError> {
+    pub fn remove_members(
+        &mut self,
+        gid: &[u8],
+        addresses: Vec<String>,
+    ) -> Result<Vec<u8>, JsError> {
         self.0.remove_members(gid, &addresses).map_err(js)
     }
     #[wasm_bindgen(js_name = updateKeys)]
@@ -110,18 +128,30 @@ impl Client {
     }
     /// Envelope-JSON verschlüsseln.
     #[wasm_bindgen(js_name = encryptEnvelope)]
-    pub fn encrypt_envelope(&mut self, gid: &[u8], envelope_json: &str) -> Result<Vec<u8>, JsError> {
-        let env: Envelope = serde_json::from_str(envelope_json).map_err(|_| JsError::new("envelope"))?;
+    pub fn encrypt_envelope(
+        &mut self,
+        gid: &[u8],
+        envelope_json: &str,
+    ) -> Result<Vec<u8>, JsError> {
+        let env: Envelope =
+            serde_json::from_str(envelope_json).map_err(|_| JsError::new("envelope"))?;
         self.0.encrypt(gid, &env.encode().map_err(js)?).map_err(js)
     }
     /// JSON: `{kind:"application", sender, envelope}` | `{kind:"commit", sender, removedSelf}` | `{kind:"proposal"}`.
     pub fn process(&mut self, gid: &[u8], message: &[u8]) -> Result<String, JsError> {
         let v = match self.0.process(gid, message).map_err(js)? {
-            mls::Received::Application { sender, sender_device, plaintext } => {
+            mls::Received::Application {
+                sender,
+                sender_device,
+                plaintext,
+            } => {
                 let env = Envelope::decode(&plaintext).map_err(js)?;
                 serde_json::json!({"kind":"application","sender":sender,"senderDevice":sender_device,"envelope":env})
             }
-            mls::Received::Commit { sender, removed_self } => {
+            mls::Received::Commit {
+                sender,
+                removed_self,
+            } => {
                 serde_json::json!({"kind":"commit","sender":sender,"removedSelf":removed_self})
             }
             mls::Received::Proposal => serde_json::json!({"kind":"proposal"}),
@@ -204,12 +234,17 @@ pub struct Vault(vault::VaultSession);
 #[wasm_bindgen]
 impl Vault {
     pub fn create(pass: &str) -> Result<Vault, JsError> {
-        vault::VaultSession::create(pass, vault::DEFAULT_KDF).map(Vault).map_err(js)
+        vault::VaultSession::create(pass, vault::DEFAULT_KDF)
+            .map(Vault)
+            .map_err(js)
     }
     /// Gibt `[Vault, Uint8Array]` zurück.
     pub fn open(pass: &str, blob: &[u8]) -> Result<js_sys::Array, JsError> {
         let (v, pt) = vault::VaultSession::open(pass, blob).map_err(js)?;
-        Ok(js_sys::Array::of2(&JsValue::from(Vault(v)), &js_sys::Uint8Array::from(&pt[..])))
+        Ok(js_sys::Array::of2(
+            &JsValue::from(Vault(v)),
+            &js_sys::Uint8Array::from(&pt[..]),
+        ))
     }
     pub fn seal(&self, data: &[u8]) -> Result<Vec<u8>, JsError> {
         self.0.seal(data).map_err(js)
@@ -222,7 +257,13 @@ pub fn envelope_key() -> Vec<u8> {
 }
 
 #[wasm_bindgen(js_name = envelopeSeal)]
-pub fn envelope_seal(key: &[u8], kind: u8, gid: &[u8], dev: &[u8], payload: &[u8]) -> Result<Vec<u8>, JsError> {
+pub fn envelope_seal(
+    key: &[u8],
+    kind: u8,
+    gid: &[u8],
+    dev: &[u8],
+    payload: &[u8],
+) -> Result<Vec<u8>, JsError> {
     envelope::seal(key, kind, gid, dev, payload).map_err(js)
 }
 

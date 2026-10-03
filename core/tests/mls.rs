@@ -29,12 +29,17 @@ fn one_to_one_and_group_lifecycle() {
         ts: 0,
         content: Content::Message {
             once: false,
-            parts: vec![Part::Code { lang: "sh".into(), body: "rm -rf /".into() }],
+            parts: vec![Part::Code {
+                lang: "sh".into(),
+                body: "rm -rf /".into(),
+            }],
         },
     };
     let ct = alice.encrypt(&gid, &env.encode().unwrap()).unwrap();
     match bob.process(&gid, &ct).unwrap() {
-        Received::Application { sender, plaintext, .. } => {
+        Received::Application {
+            sender, plaintext, ..
+        } => {
             assert_eq!(sender, "alice@a.example");
             assert_eq!(Envelope::decode(&plaintext).unwrap(), env);
         }
@@ -50,11 +55,17 @@ fn one_to_one_and_group_lifecycle() {
 
     // Carol hinzufügen: Bob wendet Commit an
     let add2 = alice.add_members(&gid, &[kp(&carol)]).unwrap();
-    assert!(matches!(bob.process(&gid, &add2.commit).unwrap(), Received::Commit { .. }));
+    assert!(matches!(
+        bob.process(&gid, &add2.commit).unwrap(),
+        Received::Commit { .. }
+    ));
     carol.join(&add2.welcome).unwrap();
     let ct = bob.encrypt(&gid, b"to all").unwrap();
     for c in [&mut alice, &mut carol] {
-        assert!(matches!(c.process(&gid, &ct).unwrap(), Received::Application { .. }));
+        assert!(matches!(
+            c.process(&gid, &ct).unwrap(),
+            Received::Application { .. }
+        ));
     }
     assert_eq!(alice.members(&gid).unwrap().len(), 3);
 
@@ -64,7 +75,9 @@ fn one_to_one_and_group_lifecycle() {
     carol.process(&gid, &upd).unwrap();
 
     // Bob entfernen: danach kann er nicht mehr lesen
-    let rm = alice.remove_members(&gid, &["bob@b.example".into()]).unwrap();
+    let rm = alice
+        .remove_members(&gid, &["bob@b.example".into()])
+        .unwrap();
     match bob.process(&gid, &rm).unwrap() {
         Received::Commit { removed_self, .. } => assert!(removed_self),
         r => panic!("{r:?}"),
@@ -72,7 +85,10 @@ fn one_to_one_and_group_lifecycle() {
     carol.process(&gid, &rm).unwrap();
     let secret = alice.encrypt(&gid, b"bob must not read").unwrap();
     assert!(bob.process(&gid, &secret).is_err());
-    assert!(matches!(carol.process(&gid, &secret).unwrap(), Received::Application { .. }));
+    assert!(matches!(
+        carol.process(&gid, &secret).unwrap(),
+        Received::Application { .. }
+    ));
 }
 
 #[test]
@@ -126,7 +142,10 @@ fn multi_device_same_account_in_one_group() {
     assert_ne!(a1.device_id(), a2.device_id());
     assert_ne!(a1.device_public(), a2.device_public());
     // das Geräte-Postfach ist aus dem AIK ableitbar: beide Geräte berechnen dasselbe
-    assert_eq!(a1.device_inbox(a2.device_id()).unwrap(), a2.device_inbox(a2.device_id()).unwrap());
+    assert_eq!(
+        a1.device_inbox(a2.device_id()).unwrap(),
+        a2.device_inbox(a2.device_id()).unwrap()
+    );
 
     let gid = a1.create_group().unwrap();
     let add = a1.add_members(&gid, &[kp(&bob)]).unwrap();
@@ -138,13 +157,23 @@ fn multi_device_same_account_in_one_group() {
     a2.join(&add2.welcome).unwrap();
     let members = bob.members(&gid).unwrap();
     assert_eq!(members.len(), 3);
-    assert_eq!(members.iter().filter(|m| m.address == "alice@a.example").count(), 2);
+    assert_eq!(
+        members
+            .iter()
+            .filter(|m| m.address == "alice@a.example")
+            .count(),
+        2
+    );
 
     // Gerät 2 schreibt, Bob und Gerät 1 lesen; Absender-Gerät ist erkennbar
     let ct = a2.encrypt(&gid, b"von gerat 2").unwrap();
     for c in [&mut bob, &mut a1] {
         match c.process(&gid, &ct).unwrap() {
-            Received::Application { sender, sender_device, plaintext } => {
+            Received::Application {
+                sender,
+                sender_device,
+                plaintext,
+            } => {
                 assert_eq!(sender, "alice@a.example");
                 assert_eq!(sender_device, a2.device_id());
                 assert_eq!(plaintext, b"von gerat 2");
@@ -157,14 +186,26 @@ fn multi_device_same_account_in_one_group() {
     assert!(matches!(r, Err(_) | Ok(Err(_))));
 
     // Gerät 2 widerrufen: Gerät 1 entfernt nur dieses Blatt
-    let rm = a1.remove_devices(&gid, &[("alice@a.example".into(), a2.device_id().to_string())]).unwrap();
+    let rm = a1
+        .remove_devices(
+            &gid,
+            &[("alice@a.example".into(), a2.device_id().to_string())],
+        )
+        .unwrap();
     match a2.process(&gid, &rm).unwrap() {
         Received::Commit { removed_self, .. } => assert!(removed_self),
         r => panic!("{r:?}"),
     }
     bob.process(&gid, &rm).unwrap();
     assert_eq!(bob.members(&gid).unwrap().len(), 2);
-    assert_eq!(bob.members(&gid).unwrap().iter().filter(|m| m.device_id == a1.device_id()).count(), 1);
+    assert_eq!(
+        bob.members(&gid)
+            .unwrap()
+            .iter()
+            .filter(|m| m.device_id == a1.device_id())
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -193,5 +234,8 @@ fn welcome_cannot_overwrite_existing_group() {
     let ct = a.encrypt(&gid, b"state must survive").unwrap();
     // Replay desselben Welcomes: abgelehnt, Zustand bleibt intakt.
     assert!(b.join(&add.welcome).is_err());
-    assert!(matches!(b.process(&gid, &ct).unwrap(), Received::Application { .. }));
+    assert!(matches!(
+        b.process(&gid, &ct).unwrap(),
+        Received::Application { .. }
+    ));
 }

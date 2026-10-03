@@ -32,19 +32,29 @@ pub fn cert_message(address: &str, device_id: &str, dpk: &[u8]) -> Vec<u8> {
 }
 
 pub fn valid_device_id(id: &str) -> bool {
-    id.len() == 16 && id.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    id.len() == 16
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
 /// Credential-Bytes (JSON) für das BasicCredential.
 pub fn encode_credential(address: &str, aik: &[u8], device_id: &str, cert_sig: &[u8]) -> Vec<u8> {
-    serde_json::to_vec(&Wire { a: address.into(), k: hex(aik), d: device_id.into(), s: hex(cert_sig) }).expect("json")
+    serde_json::to_vec(&Wire {
+        a: address.into(),
+        k: hex(aik),
+        d: device_id.into(),
+        s: hex(cert_sig),
+    })
+    .expect("json")
 }
 
 fn verify_sig(aik: &[u8], msg: &[u8], sig: &[u8]) -> Result<()> {
     let key: [u8; 32] = aik.try_into().map_err(|_| Error::Invalid("aik"))?;
     let key = VerifyingKey::from_bytes(&key).map_err(|_| Error::Invalid("aik"))?;
     let sig: [u8; 64] = sig.try_into().map_err(|_| Error::Invalid("cert"))?;
-    key.verify_strict(msg, &Signature::from_bytes(&sig)).map_err(|_| Error::Crypto("device certificate invalid"))
+    key.verify_strict(msg, &Signature::from_bytes(&sig))
+        .map_err(|_| Error::Crypto("device certificate invalid"))
 }
 
 /// Ed25519-Signatur prüfen (z. B. Kanal-Beiträge, signiert mit dem Konto-Schlüssel).
@@ -62,7 +72,11 @@ pub fn verify_credential(bytes: &[u8], dpk: &[u8]) -> Result<DeviceIdentity> {
     let aik = unhex(&w.k)?;
     let sig = unhex(&w.s)?;
     verify_sig(&aik, &cert_message(&w.a, &w.d, dpk), &sig)?;
-    Ok(DeviceIdentity { address: w.a, aik, device_id: w.d })
+    Ok(DeviceIdentity {
+        address: w.a,
+        aik,
+        device_id: w.d,
+    })
 }
 
 /// Ohne Prüfung der Signatur lesen (nur Adresse/Gerät eines bereits validierten Credentials).
@@ -105,10 +119,15 @@ pub fn derive_inbox(account_secret: &[u8], device_id: &str) -> Result<Inbox> {
     }
     let hk = Hkdf::<Sha256>::new(Some(b"chat-inbox-v1"), account_secret);
     let mut okm = [0u8; 16 + 32 + 32];
-    hk.expand(device_id.as_bytes(), &mut okm).map_err(|_| Error::Crypto("hkdf"))?;
+    hk.expand(device_id.as_bytes(), &mut okm)
+        .map_err(|_| Error::Crypto("hkdf"))?;
     let mut key = [0u8; 32];
     key.copy_from_slice(&okm[48..]);
-    Ok(Inbox { mailbox_id: base32_lower(&okm[..16]), token: hex(&okm[16..48]), key })
+    Ok(Inbox {
+        mailbox_id: base32_lower(&okm[..16]),
+        token: hex(&okm[16..48]),
+        key,
+    })
 }
 
 #[cfg(test)]
@@ -122,32 +141,73 @@ mod tests {
         let dpk = [9u8; 32];
         let dev = "0123456789abcdef";
         let sig = aik.sign(&cert_message("a@x.y", dev, &dpk));
-        let cred = encode_credential("a@x.y", aik.verifying_key().as_bytes(), dev, &sig.to_bytes());
+        let cred = encode_credential(
+            "a@x.y",
+            aik.verifying_key().as_bytes(),
+            dev,
+            &sig.to_bytes(),
+        );
         let id = verify_credential(&cred, &dpk).unwrap();
         assert_eq!((id.address.as_str(), id.device_id.as_str()), ("a@x.y", dev));
         // falscher Geräteschlüssel, fremde Adresse, fremdes Gerät, kaputte Signatur
         assert!(verify_credential(&cred, &[8u8; 32]).is_err());
-        let other_addr = encode_credential("b@x.y", aik.verifying_key().as_bytes(), dev, &sig.to_bytes());
+        let other_addr = encode_credential(
+            "b@x.y",
+            aik.verifying_key().as_bytes(),
+            dev,
+            &sig.to_bytes(),
+        );
         assert!(verify_credential(&other_addr, &dpk).is_err());
-        let other_dev = encode_credential("a@x.y", aik.verifying_key().as_bytes(), "ffffffffffffffff", &sig.to_bytes());
+        let other_dev = encode_credential(
+            "a@x.y",
+            aik.verifying_key().as_bytes(),
+            "ffffffffffffffff",
+            &sig.to_bytes(),
+        );
         assert!(verify_credential(&other_dev, &dpk).is_err());
         let mut bad = sig.to_bytes();
         bad[0] ^= 1;
-        assert!(verify_credential(&encode_credential("a@x.y", aik.verifying_key().as_bytes(), dev, &bad), &dpk).is_err());
+        assert!(verify_credential(
+            &encode_credential("a@x.y", aik.verifying_key().as_bytes(), dev, &bad),
+            &dpk
+        )
+        .is_err());
         // Zertifikat eines anderen Kontos-Schlüssels
         let evil = SigningKey::from_bytes(&[1u8; 32]);
         let forged = evil.sign(&cert_message("a@x.y", dev, &dpk));
-        assert!(verify_credential(&encode_credential("a@x.y", aik.verifying_key().as_bytes(), dev, &forged.to_bytes()), &dpk).is_err());
+        assert!(verify_credential(
+            &encode_credential(
+                "a@x.y",
+                aik.verifying_key().as_bytes(),
+                dev,
+                &forged.to_bytes()
+            ),
+            &dpk
+        )
+        .is_err());
     }
 
     #[test]
     fn inbox_is_deterministic_and_well_formed() {
         let a = derive_inbox(b"secret", "0123456789abcdef").unwrap();
         assert_eq!(a, derive_inbox(b"secret", "0123456789abcdef").unwrap());
-        assert_ne!(a.mailbox_id, derive_inbox(b"secret", "0123456789abcde0").unwrap().mailbox_id);
-        assert_ne!(a.mailbox_id, derive_inbox(b"other", "0123456789abcdef").unwrap().mailbox_id);
+        assert_ne!(
+            a.mailbox_id,
+            derive_inbox(b"secret", "0123456789abcde0")
+                .unwrap()
+                .mailbox_id
+        );
+        assert_ne!(
+            a.mailbox_id,
+            derive_inbox(b"other", "0123456789abcdef")
+                .unwrap()
+                .mailbox_id
+        );
         assert_eq!(a.mailbox_id.len(), 26);
-        assert!(a.mailbox_id.bytes().all(|c| c.is_ascii_lowercase() || (b'2'..=b'7').contains(&c)));
+        assert!(a
+            .mailbox_id
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || (b'2'..=b'7').contains(&c)));
         assert!(derive_inbox(b"s", "xyz").is_err());
     }
 }

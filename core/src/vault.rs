@@ -13,7 +13,10 @@ pub struct KdfParams {
 }
 
 /// Standard: 64 MiB, 3 Iterationen, 1 Lane (Browser-tauglich).
-pub const DEFAULT_KDF: KdfParams = KdfParams { m_kib: 64 * 1024, t: 3 };
+pub const DEFAULT_KDF: KdfParams = KdfParams {
+    m_kib: 64 * 1024,
+    t: 3,
+};
 
 fn derive(pass: &[u8], salt: &[u8], p: KdfParams) -> Result<[u8; 32]> {
     let params = Params::new(p.m_kib, p.t, 1, Some(32)).map_err(|_| Error::Crypto("kdf params"))?;
@@ -59,7 +62,10 @@ impl VaultSession {
         let ct = XChaCha20Poly1305::new((&self.key).into())
             .encrypt(
                 XNonce::from_slice(&nonce),
-                chacha20poly1305::aead::Payload { msg: plaintext, aad: &header },
+                chacha20poly1305::aead::Payload {
+                    msg: plaintext,
+                    aad: &header,
+                },
             )
             .map_err(|_| Error::Crypto("encrypt"))?;
         header.extend_from_slice(&ct);
@@ -86,7 +92,10 @@ fn open_with_key(key: &[u8; 32], blob: &[u8]) -> Result<Vec<u8>> {
     XChaCha20Poly1305::new(key.into())
         .decrypt(
             XNonce::from_slice(&blob[28..H]),
-            chacha20poly1305::aead::Payload { msg: &blob[H..], aad: &blob[..H] },
+            chacha20poly1305::aead::Payload {
+                msg: &blob[H..],
+                aad: &blob[..H],
+            },
         )
         .map_err(|_| Error::Crypto("wrong passphrase or corrupted data"))
 }
@@ -106,7 +115,10 @@ pub fn seal(pass: &str, plaintext: &[u8], kdf: KdfParams) -> Result<Vec<u8>> {
     let ct = XChaCha20Poly1305::new((&key).into())
         .encrypt(
             XNonce::from_slice(&nonce),
-            chacha20poly1305::aead::Payload { msg: plaintext, aad: &header },
+            chacha20poly1305::aead::Payload {
+                msg: plaintext,
+                aad: &header,
+            },
         )
         .map_err(|_| Error::Crypto("encrypt"))?;
     header.extend_from_slice(&ct);

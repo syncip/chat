@@ -6,9 +6,17 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
     /// Markdown-Subset, niemals als HTML interpretieren.
-    Text { body: String },
-    Code { lang: String, body: String },
-    Quote { reference: String, snippet: String },
+    Text {
+        body: String,
+    },
+    Code {
+        lang: String,
+        body: String,
+    },
+    Quote {
+        reference: String,
+        snippet: String,
+    },
     File {
         blob_id: String,
         blob_server: String,
@@ -50,17 +58,34 @@ pub enum Content {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         once: bool,
     },
-    Reaction { reference: String, emoji: String },
-    Edit { reference: String, parts: Vec<Part> },
-    Delete { reference: String },
+    Reaction {
+        reference: String,
+        emoji: String,
+    },
+    Edit {
+        reference: String,
+        parts: Vec<Part>,
+    },
+    Delete {
+        reference: String,
+    },
     /// Zustell-/Lesebestätigung (nur 1:1-Chats). `receipt`: `delivered` oder `read`.
-    Receipt { receipt: ReceiptKind, references: Vec<String> },
+    Receipt {
+        receipt: ReceiptKind,
+        references: Vec<String>,
+    },
     /// Ablaufzeit in Sekunden für Folge-Nachrichten (0 = aus).
-    Disappear { seconds: u64 },
+    Disappear {
+        seconds: u64,
+    },
     /// „Hier erreichst du uns“: Empfangs-Postfächer (Capabilities) von Mitgliedern dieser Unterhaltung.
-    Directory { entries: Vec<CapEntry> },
+    Directory {
+        entries: Vec<CapEntry>,
+    },
     /// Gruppenname.
-    GroupName { name: String },
+    GroupName {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,23 +134,45 @@ mod tests {
             content: Content::Message {
                 once: false,
                 parts: vec![
-                    Part::Quote { reference: "a".into(), snippet: "hi".into() },
-                    Part::Code { lang: "rust".into(), body: "fn main(){}".into() },
+                    Part::Quote {
+                        reference: "a".into(),
+                        snippet: "hi".into(),
+                    },
+                    Part::Code {
+                        lang: "rust".into(),
+                        body: "fn main(){}".into(),
+                    },
                 ],
             },
         };
         assert_eq!(Envelope::decode(&e.encode().unwrap()).unwrap(), e);
         assert!(Envelope::decode(b"{}").is_err());
         // `once` wird nur geschrieben, wenn gesetzt (kompatibel zu älteren Clients)
-        assert!(!String::from_utf8(e.encode().unwrap()).unwrap().contains("once"));
-        let o = Envelope { content: Content::Message { parts: vec![], once: true }, ..e.clone() };
-        assert!(String::from_utf8(o.encode().unwrap()).unwrap().contains("\"once\":true"));
+        assert!(!String::from_utf8(e.encode().unwrap())
+            .unwrap()
+            .contains("once"));
+        let o = Envelope {
+            content: Content::Message {
+                parts: vec![],
+                once: true,
+            },
+            ..e.clone()
+        };
+        assert!(String::from_utf8(o.encode().unwrap())
+            .unwrap()
+            .contains("\"once\":true"));
         let r = Envelope {
-            content: Content::Receipt { receipt: ReceiptKind::Read, references: vec!["a".into()] },
+            content: Content::Receipt {
+                receipt: ReceiptKind::Read,
+                references: vec!["a".into()],
+            },
             ..e
         };
         let enc = String::from_utf8(r.encode().unwrap()).unwrap();
-        assert!(enc.contains("\"kind\":\"receipt\"") && enc.contains("\"receipt\":\"read\""), "{enc}");
+        assert!(
+            enc.contains("\"kind\":\"receipt\"") && enc.contains("\"receipt\":\"read\""),
+            "{enc}"
+        );
         assert_eq!(Envelope::decode(enc.as_bytes()).unwrap(), r);
     }
 }

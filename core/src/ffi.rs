@@ -10,14 +10,18 @@ pub enum FfiError {
 
 impl From<Error> for FfiError {
     fn from(e: Error) -> Self {
-        FfiError::Failed { reason: e.to_string() }
+        FfiError::Failed {
+            reason: e.to_string(),
+        }
     }
 }
 
 type R<T> = Result<T, FfiError>;
 
 fn bad(m: &str) -> FfiError {
-    FfiError::Failed { reason: m.to_string() }
+    FfiError::Failed {
+        reason: m.to_string(),
+    }
 }
 
 #[derive(uniffi::Record)]
@@ -52,7 +56,9 @@ impl MlsClient {
         Ok(f(&mut g)?)
     }
     fn wrap(c: mls::Client) -> Arc<Self> {
-        Arc::new(Self { inner: Mutex::new(c) })
+        Arc::new(Self {
+            inner: Mutex::new(c),
+        })
     }
 }
 
@@ -122,7 +128,10 @@ impl MlsClient {
     pub fn add_members(&self, gid: Vec<u8>, key_packages: Vec<Vec<u8>>) -> R<AddResult> {
         self.with(|c| {
             let r = c.add_members(&gid, &key_packages)?;
-            Ok(AddResult { commit: r.commit, welcome: r.welcome })
+            Ok(AddResult {
+                commit: r.commit,
+                welcome: r.welcome,
+            })
         })
     }
     pub fn remove_members(&self, gid: Vec<u8>, addresses: Vec<String>) -> R<Vec<u8>> {
@@ -192,7 +201,9 @@ pub struct VaultSession {
 impl VaultSession {
     #[uniffi::constructor]
     pub fn create(pass: String) -> R<Arc<Self>> {
-        Ok(Arc::new(Self { inner: vault::VaultSession::create(&pass, vault::DEFAULT_KDF)? }))
+        Ok(Arc::new(Self {
+            inner: vault::VaultSession::create(&pass, vault::DEFAULT_KDF)?,
+        }))
     }
     pub fn seal(&self, data: Vec<u8>) -> R<Vec<u8>> {
         Ok(self.inner.seal(&data)?)
@@ -202,7 +213,10 @@ impl VaultSession {
 #[uniffi::export]
 pub fn vault_open(pass: String, blob: Vec<u8>) -> R<OpenedVault> {
     let (v, pt) = vault::VaultSession::open(&pass, &blob)?;
-    Ok(OpenedVault { vault: Arc::new(VaultSession { inner: v }), plaintext: pt })
+    Ok(OpenedVault {
+        vault: Arc::new(VaultSession { inner: v }),
+        plaintext: pt,
+    })
 }
 
 #[uniffi::export]
@@ -231,14 +245,25 @@ pub fn envelope_key() -> Vec<u8> {
 }
 
 #[uniffi::export]
-pub fn envelope_seal(key: Vec<u8>, kind: u8, gid: Vec<u8>, dev: Vec<u8>, payload: Vec<u8>) -> R<Vec<u8>> {
+pub fn envelope_seal(
+    key: Vec<u8>,
+    kind: u8,
+    gid: Vec<u8>,
+    dev: Vec<u8>,
+    payload: Vec<u8>,
+) -> R<Vec<u8>> {
     Ok(envelope::seal(&key, kind, &gid, &dev, &payload)?)
 }
 
 #[uniffi::export]
 pub fn envelope_open(key: Vec<u8>, blob: Vec<u8>) -> R<OpenedEnvelope> {
     let (kind, group_id, sender_device, payload) = envelope::open(&key, &blob)?;
-    Ok(OpenedEnvelope { kind, group_id, sender_device, payload })
+    Ok(OpenedEnvelope {
+        kind,
+        group_id,
+        sender_device,
+        payload,
+    })
 }
 
 /// Neuer Dateischlüssel (32 Byte) + Nonce (19 Byte), hintereinander.
@@ -287,7 +312,8 @@ mod tests {
         let a = MlsClient::create("alice@a.example".into()).unwrap();
         let b = MlsClient::create("bob@b.example".into()).unwrap();
         let kp = b.key_packages(1, false).unwrap().remove(0);
-        let id: serde_json::Value = serde_json::from_str(&a.key_package_identity(kp.clone()).unwrap()).unwrap();
+        let id: serde_json::Value =
+            serde_json::from_str(&a.key_package_identity(kp.clone()).unwrap()).unwrap();
         assert_eq!(id["address"], "bob@b.example");
         let gid = a.create_group().unwrap();
         let add = a.add_members(gid.clone(), vec![kp]).unwrap();

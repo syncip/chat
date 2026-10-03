@@ -28,7 +28,12 @@ pub fn safety_number(ik_pub: &[u8]) -> String {
     let groups: Vec<String> = h
         .chunks(2)
         .take(12)
-        .map(|c| format!("{:05}", u32::from(u16::from_be_bytes([c[0], c[1]])) % 100_000))
+        .map(|c| {
+            format!(
+                "{:05}",
+                u32::from(u16::from_be_bytes([c[0], c[1]])) % 100_000
+            )
+        })
         .collect();
     groups.join(" ")
 }
@@ -40,6 +45,19 @@ pub fn pair_safety_number(a: &[u8], b: &[u8]) -> String {
     buf.extend_from_slice(x);
     buf.extend_from_slice(y);
     safety_number(&buf)
+}
+
+pub fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+pub fn unhex(s: &str) -> Result<Vec<u8>> {
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Error::Invalid("hex"));
+    }
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| Error::Invalid("hex")))
+        .collect()
 }
 
 #[cfg(test)]
@@ -54,19 +72,9 @@ mod tests {
     }
     #[test]
     fn pair_symmetric() {
-        assert_eq!(pair_safety_number(b"a", b"b"), pair_safety_number(b"b", b"a"));
+        assert_eq!(
+            pair_safety_number(b"a", b"b"),
+            pair_safety_number(b"b", b"a")
+        );
     }
-}
-
-pub fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-pub fn unhex(s: &str) -> Result<Vec<u8>> {
-    if s.len() % 2 != 0 || !s.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return Err(Error::Invalid("hex"));
-    }
-    (0..s.len() / 2)
-        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| Error::Invalid("hex")))
-        .collect()
 }

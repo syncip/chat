@@ -104,15 +104,15 @@ fun OnboardingScreen(vm: AppViewModel) {
                     if (restore) {
                         val uri = backupUri ?: throw IllegalStateException("Bitte Backup-Datei wählen.")
                         val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Datei nicht lesbar.")
-                        vm.engine.restoreBackup(bytes, backupPass, pass)
+                        vm.engine.linkDevice(bytes, backupPass, pass)
                     } else {
                         vm.engine.createAccount(server, name, invite, pass)
                     }
                     busy = false
                 }
             },
-        ) { Text(if (busy) "Bitte warten …" else if (restore) "Backup wiederherstellen" else "Konto erstellen") }
-        TextButton(onClick = { restore = !restore }) { Text(if (restore) "Neues Konto erstellen" else "Konto aus Backup wiederherstellen") }
+        ) { Text(if (busy) "Bitte warten …" else if (restore) "Gerät anmelden" else "Konto erstellen") }
+        TextButton(onClick = { restore = !restore }) { Text(if (restore) "Neues Konto erstellen" else "Mit Backup-Datei auf diesem Gerät anmelden") }
     }
 }
 

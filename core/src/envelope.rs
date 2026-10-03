@@ -41,8 +41,11 @@ pub fn seal(key: &[u8], kind: u8, gid: &[u8], dev: &[u8], payload: &[u8]) -> Res
     Ok(out)
 }
 
+/// `(kind, group_id, sender_device, payload)`.
+pub type Opened = (u8, Vec<u8>, Vec<u8>, Vec<u8>);
+
 /// Liefert `(kind, group_id, sender_device, payload)`.
-pub fn open(key: &[u8], blob: &[u8]) -> Result<(u8, Vec<u8>, Vec<u8>, Vec<u8>)> {
+pub fn open(key: &[u8], blob: &[u8]) -> Result<Opened> {
     if key.len() != 32 || blob.len() < NONCE + 16 {
         return Err(Error::Invalid("envelope"));
     }
@@ -56,8 +59,15 @@ pub fn open(key: &[u8], blob: &[u8]) -> Result<(u8, Vec<u8>, Vec<u8>, Vec<u8>)> 
     let n = u16::from_be_bytes([inner[1], inner[2]]) as usize;
     let gid = inner.get(3..3 + n).ok_or(Error::Invalid("envelope"))?;
     let dl = *inner.get(3 + n).ok_or(Error::Invalid("envelope"))? as usize;
-    let dev = inner.get(4 + n..4 + n + dl).ok_or(Error::Invalid("envelope"))?;
-    Ok((inner[0], gid.to_vec(), dev.to_vec(), inner[4 + n + dl..].to_vec()))
+    let dev = inner
+        .get(4 + n..4 + n + dl)
+        .ok_or(Error::Invalid("envelope"))?;
+    Ok((
+        inner[0],
+        gid.to_vec(),
+        dev.to_vec(),
+        inner[4 + n + dl..].to_vec(),
+    ))
 }
 
 #[cfg(test)]
@@ -70,7 +80,10 @@ mod tests {
         let b = seal(&k, KIND_MLS, b"gid", b"dev1", b"a bit longer payload").unwrap();
         assert_eq!(a.len(), b.len());
         let (kind, gid, dev, p) = open(&k, &a).unwrap();
-        assert_eq!((kind, gid.as_slice(), dev.as_slice(), p.as_slice()), (KIND_MLS, &b"gid"[..], &b"dev1"[..], &b"short"[..]));
+        assert_eq!(
+            (kind, gid.as_slice(), dev.as_slice(), p.as_slice()),
+            (KIND_MLS, &b"gid"[..], &b"dev1"[..], &b"short"[..])
+        );
         assert!(open(&random_key(), &a).is_err());
         let mut t = a.clone();
         t[30] ^= 1;

@@ -17,7 +17,9 @@ pub fn unpad(data: &[u8]) -> Result<Vec<u8>> {
         return Err(Error::Invalid("padding"));
     }
     let n = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    data.get(4..4 + n).map(|s| s.to_vec()).ok_or(Error::Invalid("padding"))
+    data.get(4..4 + n)
+        .map(|s| s.to_vec())
+        .ok_or(Error::Invalid("padding"))
 }
 
 #[cfg(test)]

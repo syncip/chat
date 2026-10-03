@@ -147,6 +147,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	defer func() {
+		if rec := recover(); rec != nil && rec != http.ErrAbortHandler {
+			s.log.Error("panic", "path", r.URL.Path, "err", rec)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+		}
+	}()
 	s.mux.ServeHTTP(w, r)
 }
 

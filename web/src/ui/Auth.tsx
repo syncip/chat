@@ -1,5 +1,12 @@
 import { useRef, useState } from 'react';
+import { isInsecureTransport } from '../lib/util';
 import { useEngine } from './hooks';
+
+function TransportNote() {
+  return isInsecureTransport() ? (
+    <p className="warn">⚠ Unverschlüsselte Verbindung (http). Nachrichten bleiben Ende-zu-Ende verschlüsselt, aber jemand im Netzwerk kann diese App manipulieren. Nur in vertrauenswürdigen Netzen nutzen.</p>
+  ) : null;
+}
 
 export function Onboarding() {
   const e = useEngine();
@@ -39,6 +46,7 @@ export function Onboarding() {
     <div className="center">
       <form className="card auth" onSubmit={submit}>
         <h1>Chat</h1>
+        <TransportNote />
         <p className="muted">
           Ende-zu-Ende-verschlüsselt. Dein Schlüssel wird auf diesem Gerät erzeugt und verlässt es nie.
         </p>

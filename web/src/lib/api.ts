@@ -8,6 +8,23 @@ export class ApiError extends Error {
   }
 }
 
+/** fetch mit verständlicher Fehlermeldung (der Browser liefert bei Netzwerkfehlern nur „Failed to fetch“). */
+async function doFetch(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    console.error('fetch failed', url, e);
+    const origin = new URL(url).origin;
+    let hint = 'Server nicht erreichbar, Firewall/Port blockiert oder die Adresse ist falsch.';
+    if (location.protocol === 'https:' && url.startsWith('http:')) {
+      hint = 'Die Seite wurde über https geladen, der Server spricht aber nur http (Mixed Content). Öffne die App über http://IP:PORT.';
+    } else if (location.origin !== origin) {
+      hint += ' Bei fremden Servern muss dieser CORS erlauben und erreichbar sein.';
+    }
+    throw new Error(`Verbindung zu ${origin} fehlgeschlagen. ${hint}`);
+  }
+}
+
 export interface Signer {
   name: string;
   sign(data: Uint8Array): Uint8Array;
@@ -55,7 +72,7 @@ export class Api {
   async call<T = unknown>(method: string, uri: string, body?: unknown, ok: number[] = [200, 201, 202, 204]): Promise<T> {
     const raw = body === undefined ? new Uint8Array() : enc.encode(JSON.stringify(body));
     const bodyHash = hex(await sha256(raw));
-    const res = await fetch(this.base + uri, {
+    const res = await doFetch(this.base + uri, {
       method,
       headers: {
         Authorization: await this.authHeader(method, uri, bodyHash),
@@ -84,7 +101,7 @@ export class Api {
   }
 
   async publicGet<T>(path: string): Promise<T> {
-    const res = await fetch(this.base + path, { referrerPolicy: 'no-referrer', credentials: 'omit', cache: 'no-store' });
+    const res = await doFetch(this.base + path, { referrerPolicy: 'no-referrer', credentials: 'omit', cache: 'no-store' });
     return this.parse<T>(res, [200]);
   }
 
@@ -93,7 +110,7 @@ export class Api {
   }
 
   async register(req: object): Promise<{ address: string; intro: { mailbox_id: string; send_token: string } }> {
-    const res = await fetch(this.base + '/v1/register', {
+    const res = await doFetch(this.base + '/v1/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
@@ -106,7 +123,7 @@ export class Api {
   /** Datei (Chiffretext) hochladen. Der Body ist nicht Teil der Signatur (UNSIGNED); er ist E2E-authentifiziert. */
   async uploadBlob(data: Uint8Array): Promise<string> {
     const auth = await this.authHeader('POST', '/v1/blobs', 'UNSIGNED');
-    const res = await fetch(this.base + '/v1/blobs', {
+    const res = await doFetch(this.base + '/v1/blobs', {
       method: 'POST',
       headers: { Authorization: auth, 'X-Body-Hash': 'UNSIGNED', 'Content-Type': 'application/octet-stream' },
       body: data as BodyInit,
@@ -117,7 +134,7 @@ export class Api {
   }
 
   static async downloadBlob(server: string, id: string): Promise<Uint8Array> {
-    const res = await fetch(`${baseUrl(server)}/v1/blobs/${encodeURIComponent(id)}`, {
+    const res = await doFetch(`${baseUrl(server)}/v1/blobs/${encodeURIComponent(id)}`, {
       referrerPolicy: 'no-referrer',
       credentials: 'omit',
     });
@@ -127,7 +144,7 @@ export class Api {
 
   /** Direkter, anonymer Einwurf beim Ziel-Server (ohne Home-Server-Relay). */
   static async putDirect(domain: string, mailboxId: string, token: string, blob: Uint8Array): Promise<number> {
-    const res = await fetch(`${baseUrl(domain)}/v1/mailboxes/${encodeURIComponent(mailboxId)}/messages`, {
+    const res = await doFetch(`${baseUrl(domain)}/v1/mailboxes/${encodeURIComponent(mailboxId)}/messages`, {
       method: 'PUT',
       headers: { 'X-Send-Token': token },
       body: blob as BodyInit,

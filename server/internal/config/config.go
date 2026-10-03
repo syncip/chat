@@ -65,7 +65,7 @@ func Load() (*Config, error) {
 		FedInsecure:      envBool("CHAT_FEDERATION_INSECURE_HTTP", false),
 		TrustProxyHdr:    env("CHAT_TRUST_PROXY_HEADER", ""),
 		CSPConnectExtra:  env("CHAT_CSP_CONNECT_EXTRA", ""),
-		RatePerMinute:    int(envInt("CHAT_RATE_PER_MINUTE", 120)),
+		RatePerMinute:    int(envInt("CHAT_RATE_PER_MINUTE", 600)),
 		MaxMailboxes:     int(envInt("CHAT_MAX_MAILBOXES", 5000)),
 		MaxKeyPackages:   int(envInt("CHAT_MAX_KEYPACKAGES", 200)),
 	}

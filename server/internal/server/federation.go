@@ -20,6 +20,8 @@ import (
 	"time"
 )
 
+var _, cgnat, _ = net.ParseCIDR("100.64.0.0/10")
+
 var domainRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?$`)
 
 func normDomain(d string) string { return strings.ToLower(strings.TrimSpace(d)) }
@@ -59,6 +61,9 @@ func newFederation(s *Server) *federation {
 				return err
 			}
 			ip := net.ParseIP(host)
+			if ip != nil && cgnat.Contains(ip) {
+				return errors.New("blocked address")
+			}
 			if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 				ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
 				return errors.New("blocked address")

@@ -119,3 +119,16 @@ fn sign_is_deterministic_length() {
     let a = Client::new("a@x.y").unwrap();
     assert_eq!(a.sign(b"hello").unwrap().len(), 64);
 }
+
+#[test]
+fn welcome_cannot_overwrite_existing_group() {
+    let mut a = Client::new("a@x.y").unwrap();
+    let mut b = Client::new("b@x.y").unwrap();
+    let gid = a.create_group().unwrap();
+    let add = a.add_members(&gid, &[kp(&b)]).unwrap();
+    b.join(&add.welcome).unwrap();
+    let ct = a.encrypt(&gid, b"state must survive").unwrap();
+    // Replay desselben Welcomes: abgelehnt, Zustand bleibt intakt.
+    assert!(b.join(&add.welcome).is_err());
+    assert!(matches!(b.process(&gid, &ct).unwrap(), Received::Application { .. }));
+}

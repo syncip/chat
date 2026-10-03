@@ -1,6 +1,6 @@
 # Protokoll-Entwurf v0
 
-Status: Entwurf. Änderungen sind bis zur Implementierung von Phase 2 erwünscht.
+Status: **v0, implementiert** (Server `server/`, Kern `core/`, Web-Client `web/`). Abschnitt 11 listet, wo die Umsetzung vom ursprünglichen Entwurf abweicht und was noch offen ist.
 
 ## 1. Identität und Adressen
 
@@ -50,7 +50,7 @@ GET  /v1/auth/challenge                 → { nonce }
 
 ## 4. Nachrichtenformat (im verschlüsselten Payload)
 
-Alles Folgende liegt im MLS-Anwendungsnachricht-Payload (CBOR), der Server sieht nur Padding-Blobs.
+Alles Folgende liegt im MLS-Anwendungsnachricht-Payload (JSON, `core/src/message.rs`), der Server sieht nur Padding-Blobs.
 
 | Typ | Felder |
 |---|---|
@@ -133,3 +133,49 @@ Der Server kennt sie nicht.
 - Alle Payloads sind opaque Binärdaten, das Protokoll ist sprachunabhängig → Windows/Linux/Android/iOS-Clients möglich.
 - Ein gemeinsamer Krypto-Kern (`core`, Rust) wird als WASM (Web), UniFFI (Android/iOS) und nativ (Desktop) eingebunden.
 - `GET /v1/server-info` enthält den Hash des ausgelieferten Web-Bundles, damit native Clients/Add-ons ihn prüfen können.
+
+## 11. Umsetzung: Abweichungen, Ergänzungen, Offenes
+
+### Authentifizierung (implementiert)
+`Authorization: Chat-Sig name=<n>,ts=<unix>,nonce=<b64>,sig=<b64>`; signiert wird
+`"CHAT-REQ-V1\n<server-domain>\n<METHOD>\n<RequestURI>\n<ts>\n<nonce>\n<hex sha256(body)>"`.
+Toleranz ±60 s, Nonce-Replay-Cache, Server-Domain im Signaturtext (kein Replay gegen andere Server).
+Datei-Uploads verwenden `X-Body-Hash: UNSIGNED` (der Body ist ohnehin Ende-zu-Ende authentifiziert).
+WebSocket: erste Nachricht `{name,ts,nonce,sig}` (Body-Hash `WS`).
+
+### Äußere Umschlag-Schicht (neu gegenüber dem Entwurf)
+MLS-Nachrichten enthalten die **Gruppen-ID im Klartext-Header**. Damit der Server Nachrichten derselben Gruppe
+nicht verknüpfen kann, wird jeder Blob zusätzlich mit einem **Postfach-Schlüssel** (XChaCha20-Poly1305) umhüllt
+(`core/src/envelope.rs`) und auf eine Größenklasse (Zweierpotenz, min. 256 B) aufgefüllt. Der Schlüssel ist Teil der
+Postfach-Capability (`domain`, `mailbox_id`, `send_token`, `key`). Innen: `kind` (1 = Welcome, 2 = MLS), Gruppen-ID, Payload.
+
+### Kontaktaufnahme
+Der Kontaktlink `https://<host>/#/add/<base64url>` enthält Adresse und Intro-Capability (im URL-Fragment, wird nie an einen Server gesendet).
+Ohne Link ist ein Nutzer nicht anschreibbar (Anti-Spam, Anonymität). Das Welcome landet als **Anfrage** beim Empfänger;
+erst nach „Annehmen“ erfährt der Absender dessen Konversations-Postfach (Anfragen lassen sich ohne Rückmeldung ablehnen).
+
+### Postfächer pro Unterhaltung, Verzeichnis
+Jedes Mitglied hat pro Unterhaltung **ein** Empfangs-Postfach und kündigt es per MLS-Nachricht `directory` an.
+Neu angekündigte Einträge werden von bereits verbundenen Mitgliedern **weitergereicht** (sonst kennen sich Mitglieder
+ohne direkten Kontakt nicht). Regeln: Selbst-Ankündigungen überschreiben immer, fremde Einträge nur, wenn noch keiner bekannt ist.
+
+### Blockieren
+- *Nutzer (DM):* Postfach der Unterhaltung wird widerrufen (serverseitig durchgesetzt) und weitere Nachrichten werden verworfen.
+- *Nutzer (Gruppe)* und *Server*: clientseitiges Verwerfen **nach** der MLS-Verarbeitung (der Zustand bleibt synchron).
+- Absender erfahren nichts: der Server antwortet bei gefilterten Einwürfen mit `202` wie bei Erfolg.
+- *Allowlist-Modus:* nur erlaubte Nutzer/Server und verifizierte Kontakte. Optional gehashte Domain-Liste beim Home-Server (`PUT /v1/filters`).
+
+### Limits
+Dateigröße, Kontingent, Aufbewahrung und Envelope-Größe erzwingt der **Server**. „Dateien pro Nachricht“, „Gesamtgröße pro Nachricht“
+und „Text pro Nachricht“ erzwingt der **Client** (der Server sieht Nachrichten nicht); Werte stehen in `GET /v1/server-info`.
+
+### Offen / bekannte Einschränkungen
+- **Multi-Device** (Abschnitt 9): noch nicht umgesetzt (1 Gerät pro Konto, Backup-Datei).
+- **Key Transparency** und **Post-Quanten-Ciphersuite**: nicht umgesetzt (Roadmap). Bis dahin: Safety Numbers vergleichen.
+- **Lokale Schlüssel im Browser** liegen im IndexedDB verschlüsselt (Argon2id + XChaCha20-Poly1305), im Speicher aber entschlüsselt, solange die App entsperrt ist.
+- **Gruppen:** jedes Mitglied darf Mitglieder hinzufügen/entfernen (kein Admin-Konzept); „Verlassen“ ist rein lokal.
+- **Zustellung:** fehlgeschlagene Sendungen werden wiederholt (Outbox), es gibt aber keine Zustellbestätigungen.
+- **Zeitstempel** sind sendergesteuert; **Reihenfolge** zwischen Absendern ist nicht kryptografisch garantiert.
+- **Cover-Traffic**, Postfach-Rotation: nicht umgesetzt. Der Server sieht Zeitpunkt und (aufgefüllte) Größe jedes Einwurfs.
+- **Datei-Downloads** gehen direkt zum Server des Absenders (nur nach Klick; zeigt dessen Server die IP des Empfängers).
+- Dieser Code ist **nicht extern auditiert**.

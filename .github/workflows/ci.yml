@@ -1,0 +1,62 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
+      - run: cargo test --locked
+        working-directory: core
+      - run: cargo clippy --locked --all-targets -- -D warnings
+        working-directory: core
+      - run: cargo build --locked --release --target wasm32-unknown-unknown
+        working-directory: core
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
+      - run: go vet ./...
+        working-directory: server
+      - run: go test -race ./...
+        working-directory: server
+
+  web-and-e2e:
+    runs-on: ubuntu-latest
+    needs: [core]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
+      - run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
+      - run: ./scripts/build-wasm.sh
+        working-directory: web
+      - run: npm ci
+        working-directory: web
+      - run: npm run typecheck && npm test && npm run build
+        working-directory: web
+      - run: go build -o chatd ./cmd/chatd
+        working-directory: server
+      - run: npm install && npx playwright install --with-deps chromium
+        working-directory: e2e
+      - name: E2E (zwei föderierte Server, drei Browser)
+        working-directory: e2e
+        env:
+          CHATD: ${{ github.workspace }}/server/chatd
+          WEB_DIR: ${{ github.workspace }}/web/dist
+        run: node e2e.mjs && node e2e-group.mjs

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +18,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg, err := config.Load()
 	if err != nil {
@@ -62,4 +66,21 @@ func main() {
 		log.Error("listen", "err", err)
 		os.Exit(1)
 	}
+}
+
+// healthcheck prüft den lokalen Server (für Docker HEALTHCHECK, ohne curl im Image).
+func healthcheck() int {
+	addr := os.Getenv("CHAT_LISTEN")
+	if addr == "" {
+		addr = ":8080"
+	}
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	c := http.Client{Timeout: 3 * time.Second}
+	r, err := c.Get("http://" + addr + "/v1/server-info")
+	if err != nil || r.StatusCode != 200 {
+		return 1
+	}
+	return 0
 }

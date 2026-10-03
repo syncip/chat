@@ -1,0 +1,56 @@
+# Beispiel-Betrieb. Anpassen: CHAT_DOMAIN (öffentlicher Hostname), Limits, Tunnel.
+# Start:  docker compose -f deploy/docker-compose.yml up -d --build
+# Die erste Einladung steht im Log:  docker compose logs chat | grep Einladung
+services:
+  chat:
+    build: { context: .., dockerfile: Dockerfile }
+    restart: unless-stopped
+    environment:
+      CHAT_DOMAIN: chat.example.org          # exakt der öffentliche Hostname (Teil der Adresse name@domain)
+      CHAT_REGISTRATION: invite              # invite | open | closed
+      CHAT_FEDERATION: open                  # open | allowlist | closed
+      # CHAT_FEDERATION_ALLOW: friend.example,other.example
+      # CHAT_FEDERATION_BLOCK: spam.example
+      CHAT_ADMIN_KEY: ${CHAT_ADMIN_KEY:?setze CHAT_ADMIN_KEY}   # für /v1/admin/invites
+      CHAT_USER_INVITES: "false"             # dürfen Nutzer Einladungen erzeugen?
+      # Limits (alle änderbar):
+      CHAT_MAX_FILE_SIZE: "104857600"        # 100 MB pro Datei
+      CHAT_MAX_MESSAGE_ATTACHMENTS: "10"     # Dateien pro Nachricht
+      CHAT_MAX_MESSAGE_TOTAL_SIZE: "524288000" # Gesamtgröße pro Nachricht
+      CHAT_USER_QUOTA: "10737418240"         # 10 GB pro Nutzer
+      CHAT_BLOB_RETENTION_DAYS: "30"
+      CHAT_MESSAGE_RETENTION_DAYS: "30"
+      # Hinter einem Tunnel/Proxy: Header mit der echten Client-IP (nur für Rate-Limits, es wird nichts geloggt)
+      # Pangolin/Traefik: X-Forwarded-For   Cloudflare: CF-Connecting-IP
+      CHAT_TRUST_PROXY_HEADER: X-Forwarded-For
+    volumes:
+      - chat-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"                # nur lokal; öffentlich erreichbar über den Tunnel
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # Option A: Cloudflare Tunnel (Cloudflare sieht Verkehrsmetadaten, siehe docs/THREAT_MODEL.md)
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   command: tunnel --no-autoupdate run
+  #   environment: { TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN} }
+  #   restart: unless-stopped
+  #   # Im Cloudflare-Dashboard: Public Hostname → Service http://chat:8080
+  #   # und CHAT_TRUST_PROXY_HEADER=CF-Connecting-IP setzen.
+
+  # Option B: Pangolin (selbst gehostet, empfohlen). Der "newt"-Client verbindet diesen Host mit deiner Pangolin-Instanz.
+  # Image/Variablen bitte mit der aktuellen Pangolin-Dokumentation abgleichen.
+  # newt:
+  #   image: fosrl/newt
+  #   restart: unless-stopped
+  #   environment:
+  #     PANGOLIN_ENDPOINT: https://pangolin.example.org
+  #     NEWT_ID: ${NEWT_ID}
+  #     NEWT_SECRET: ${NEWT_SECRET}
+  #   # In Pangolin eine Ressource anlegen: Ziel http://chat:8080 (WebSocket wird unterstützt).
+
+volumes:
+  chat-data:

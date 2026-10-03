@@ -37,6 +37,9 @@ func (s *Server) webHandler() http.Handler {
 			}
 			r.URL.Path = "/"
 		}
+		if strings.HasPrefix(p, "/assets/") { // Dateinamen enthalten den Inhalts-Hash
+			h.Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
 		if strings.HasSuffix(p, ".wasm") {
 			h.Set("Content-Type", "application/wasm")
 		}

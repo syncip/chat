@@ -224,6 +224,34 @@ func TestRegistrationClosedAndOpenPoW(t *testing.T) {
 	}
 }
 
+func TestOpenRegistrationWithPoW(t *testing.T) {
+	n := newNode(t, func(c *config.Config) { c.Registration = "open"; c.RegistrationPoW = 8 })
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	ts := time.Now().Unix()
+	tss := strconv.FormatInt(ts, 10)
+	reg := func(pow string) int {
+		sig := ed25519.Sign(priv, []byte("CHAT-REGISTER-V1\n"+n.domain+"\nalice\n"+tss))
+		body, _ := json.Marshal(map[string]any{"name": "alice", "ik": b64.EncodeToString(pub), "ts": ts, "sig": b64.EncodeToString(sig), "pow": pow})
+		req, _ := http.NewRequest("POST", n.ts.URL+"/v1/register", bytes.NewReader(body))
+		resp := do(t, req)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if c := reg("nope"); c != 403 && c != 201 { // 1/256 Zufallstreffer möglich
+		t.Fatalf("bad pow: %d", c)
+	}
+	for i := 0; ; i++ {
+		nonce := strconv.Itoa(i)
+		h := sha256.Sum256([]byte("alice:" + tss + ":" + nonce))
+		if h[0] == 0 {
+			if c := reg(nonce); c != 201 && c != 409 {
+				t.Fatalf("valid pow rejected: %d", c)
+			}
+			return
+		}
+	}
+}
+
 func TestAuthReplayAndSkew(t *testing.T) {
 	n := newNode(t, nil)
 	u := n.mustUser("alice")

@@ -187,6 +187,24 @@ impl Client {
         let MlsMessageBodyIn::Welcome(w) = msg.extract() else {
             return Err(Error::Invalid("not a welcome"));
         };
+        // Ein Welcome darf keinen bestehenden Gruppenzustand überschreiben (z. B. durch ein böswilliges
+        // Mitglied, das die Gruppen-ID kennt). Die ID steht erst nach dem Beitritt fest, daher zuerst
+        // in einer Kopie des Speichers beitreten und prüfen.
+        let probe = OpenMlsRustCrypto::default();
+        {
+            let src = self.provider.storage().values.read().map_err(|_| Error::Crypto("lock"))?;
+            let mut dst = probe.storage().values.write().map_err(|_| Error::Crypto("lock"))?;
+            dst.clone_from(&src);
+        }
+        let probe_gid = StagedWelcome::new_from_welcome(&probe, &join_config(), w.clone(), None)
+            .map_err(mls)?
+            .into_group(&probe)
+            .map_err(mls)?
+            .group_id()
+            .clone();
+        if MlsGroup::load(self.provider.storage(), &probe_gid).map_err(mls)?.is_some() {
+            return Err(Error::Invalid("group already exists"));
+        }
         let g = StagedWelcome::new_from_welcome(&self.provider, &join_config(), w, None)
             .map_err(mls)?
             .into_group(&self.provider)

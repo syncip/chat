@@ -46,6 +46,12 @@
 - **Betrieb ohne TLS (IP:PORT):** Ohne TLS kann ein Angreifer im Netzwerk den Web-Client austauschen (Schlüsseldiebstahl) und sieht
   alle Verkehrsmetadaten samt IPs. Inhalte der Nachrichten bleiben bei unverändertem Client geschützt. Nur in vertrauenswürdigen Netzen (LAN/VPN) verwenden.
 
+## Öffentliche Kanäle
+
+Kanäle (docs/CHANNELS.md) sind **keine** MLS-Gruppen: Der Kanalschlüssel steht im Link, jeder Linkinhaber kann mitlesen, und der Server kennt Mitglieder
+(Konto-Schlüssel + Adresse), Rollen und Beitragszeiten. Inhalte sind dem Server verborgen, Rechte/Sperren werden aber **vom Server** erzwungen:
+Ein bösartiger Server kann Beiträge zurückhalten oder löschen, aber nicht fälschen (Signatur mit dem Konto-Schlüssel). Keine Schlüsselrotation (v1).
+
 ## Grundprinzipien
 
 - Keine eigene Kryptografie: nur standardisierte Protokolle (MLS RFC 9420) und geprüfte Bibliotheken.

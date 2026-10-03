@@ -194,3 +194,8 @@ Ohne TLS ist der ausgelieferte Web-Client manipulierbar (siehe THREAT_MODEL); de
 - **Cover-Traffic**, Postfach-Rotation: nicht umgesetzt. Der Server sieht Zeitpunkt und (aufgefüllte) Größe jedes Einwurfs.
 - **Datei-Downloads** gehen direkt zum Server des Absenders (nur nach Klick; zeigt dessen Server die IP des Empfängers).
 - Dieser Code ist **nicht extern auditiert**.
+
+
+## 12. Öffentliche Kanäle
+
+Siehe [CHANNELS.md](CHANNELS.md): Link-Schlüssel, `Chan-Sig`-Authentifizierung mit dem Konto-Schlüssel, Beitrittsregeln (offen/Freigabe/PoW/Captcha), Rechte, Moderation, WebSocket-Stream.

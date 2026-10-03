@@ -5,7 +5,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,6 +67,10 @@ class Engine(
 
     private val _online = MutableStateFlow(false)
     val online: StateFlow<Boolean> = _online
+
+    private val _newMessages = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    /** Konversations-ID bei jeder neuen eingehenden Nachricht (für Benachrichtigungen, ohne Inhalt). */
+    val newMessages: SharedFlow<String> = _newMessages
 
     private val incoming = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private var pump: Job? = null
@@ -146,6 +152,12 @@ class Engine(
         vault = opened.vault
         client = MlsClient.importState(j["mls"]!!.jsonPrimitive.content.unb64())
         state = ChatJson.decodeFromJsonElement(AppState.serializer(), j["app"]!!)
+    }
+
+    /** Prüft die Passphrase gegen den gespeicherten Vault (z. B. vor dem Aktivieren der Biometrie). */
+    suspend fun checkPassphrase(passphrase: String): Boolean = op {
+        val blob = store.read("vault") ?: return@op false
+        try { uniffi.chat_core.vaultOpenPlain(passphrase, blob); true } catch (e: Exception) { false }
     }
 
     /** Backup als verschlüsselte Datei (Format identisch zum Web-Client). */
@@ -411,6 +423,7 @@ class Engine(
                 conv.messages.add(msg)
                 conv.messages.sortBy { it.ts }
                 conv.unread++
+                _newMessages.tryEmit(conv.id)
             }
             is Content.Reaction -> {
                 val m = conv.messages.find { it.id == c.reference } ?: return

@@ -14,11 +14,17 @@ kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarg
 val coreDir = rootDir.resolve("../core")
 val bindingsDir = layout.buildDirectory.dir("generated/uniffi")
 
+// JNA: auf Android liefert die App das AAR (mit nativen Dispatch-Bibliotheken); auf der JVM (Tests) das JAR.
+val jnaJar: Configuration by configurations.creating
+
+configurations.compileOnly { extendsFrom(jnaJar) }
+configurations.testImplementation { extendsFrom(jnaJar) }
+
 dependencies {
+    jnaJar("net.java.dev.jna:jna:5.15.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    api("net.java.dev.jna:jna:5.15.0")
 
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
@@ -61,7 +67,7 @@ tasks.test {
 // Interop-Gegenstelle (siehe e2e/e2e-android-interop.mjs)
 tasks.register<JavaExec>("runPeer") {
     dependsOn("classes")
-    classpath = sourceSets.main.get().runtimeClasspath
+    classpath = sourceSets.main.get().runtimeClasspath + jnaJar
     mainClass.set("chat.engine.tools.PeerKt")
     systemProperty("jna.library.path", coreDir.resolve("target/debug").absolutePath)
     args = (findProperty("peerArgs") as String? ?: "").split(" ").filter { it.isNotEmpty() }

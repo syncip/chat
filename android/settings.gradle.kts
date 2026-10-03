@@ -2,13 +2,13 @@ pluginManagement {
     repositories {
         gradlePluginPortal()
         mavenCentral()
-        maven("https://maven.google.com")
+        google()
     }
 }
 dependencyResolutionManagement {
     repositories {
         mavenCentral()
-        maven("https://maven.google.com")
+        google()
     }
 }
 

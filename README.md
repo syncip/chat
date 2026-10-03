@@ -49,6 +49,16 @@ CHAT_FEDERATION_ALLOW_PRIVATE=true # nur nötig, wenn mehrere Server in privaten
 - Die Adresse ist Teil der Identität: Ändert sich die IP oder der Port, ändern sich alle Adressen (Konten ziehen nicht automatisch um).
 - IPv6-Adressen werden noch nicht unterstützt. Hinter NAT/Port-Mapping muss `CHAT_DOMAIN` mit dem von außen erreichbaren `IP:PORT` übereinstimmen.
 
+## Android-App (Kotlin, nativ)
+
+`android/` enthält die native App (Jetpack Compose) mit dem Rust-Kern über UniFFI. Die Client-Logik liegt im reinen JVM-Modul
+`android/engine` und wird gegen echte Server getestet (`./gradlew :engine:test -Pchatd=<pfad/chatd>`), inklusive Interop mit dem Web-Client
+(`e2e/e2e-android-interop.mjs`). Sicherheit: Keystore-Zweitverschlüsselung (StrongBox), Passphrase (Argon2id), optional Biometrie,
+`FLAG_SECURE`, kein Cloud-Backup, nur System-Zertifikate, Benachrichtigungen ohne Inhalt, Auto-Sperre.
+Bauen: `scripts/build-android-core.sh` (NDK, cargo-ndk), dann `cd android && ./gradlew :app:assembleDebug`.
+**Das Modul `:app` (UI, Keystore, Biometrie, Service) wurde noch nicht kompiliert** (kein Android SDK in der Entwicklungsumgebung);
+der Workflow `.github/workflows/android.yml` baut es und zeigt eventuelle Fehler.
+
 ## Entwicklung
 
 ```bash

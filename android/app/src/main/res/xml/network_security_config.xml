@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Nur System-Zertifikate (keine vom Nutzer/Malware installierten CAs).
+  Klartext (http) ist erlaubt, weil Server ohne Domain (IP:PORT) kein TLS-Zertifikat haben können. Die App verwendet
+  http ausschließlich für IP-Adressen und localhost und warnt in der Oberfläche; Domains laufen immer über https.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

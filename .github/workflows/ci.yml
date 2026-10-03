@@ -45,7 +45,6 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
       - run: ./scripts/build-wasm.sh
-        working-directory: web
       - run: npm ci
         working-directory: web
       - run: npm run typecheck && npm test && npm run build

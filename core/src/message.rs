@@ -21,6 +21,13 @@ pub enum Part {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptKind {
+    Delivered,
+    Read,
+}
+
 /// Postfach-Capability eines Mitglieds: Server, Postfach-ID, Einwurf-Token, Umschlag-Schlüssel (base64).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CapEntry {
@@ -34,11 +41,17 @@ pub struct CapEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Content {
-    Message { parts: Vec<Part> },
+    /// `once`: Einmal-Nachricht (nach dem ersten Anzeigen beim Empfänger gelöscht; nur in 1:1-Chats).
+    Message {
+        parts: Vec<Part>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        once: bool,
+    },
     Reaction { reference: String, emoji: String },
     Edit { reference: String, parts: Vec<Part> },
     Delete { reference: String },
-    Read { reference: String },
+    /// Zustell-/Lesebestätigung (nur 1:1-Chats). `receipt`: `delivered` oder `read`.
+    Receipt { receipt: ReceiptKind, references: Vec<String> },
     /// Ablaufzeit in Sekunden für Folge-Nachrichten (0 = aus).
     Disappear { seconds: u64 },
     /// „Hier erreichst du uns“: Empfangs-Postfächer (Capabilities) von Mitgliedern dieser Unterhaltung.
@@ -69,7 +82,8 @@ impl Envelope {
             return Err(Error::Invalid("version"));
         }
         let n = match &e.content {
-            Content::Message { parts } | Content::Edit { parts, .. } => parts.len(),
+            Content::Message { parts, .. } | Content::Edit { parts, .. } => parts.len(),
+            Content::Receipt { references, .. } => references.len(),
             Content::Directory { entries } => entries.len(),
             _ => 0,
         };
@@ -90,6 +104,7 @@ mod tests {
             id: "x".into(),
             ts: 1,
             content: Content::Message {
+                once: false,
                 parts: vec![
                     Part::Quote { reference: "a".into(), snippet: "hi".into() },
                     Part::Code { lang: "rust".into(), body: "fn main(){}".into() },
@@ -98,5 +113,16 @@ mod tests {
         };
         assert_eq!(Envelope::decode(&e.encode().unwrap()).unwrap(), e);
         assert!(Envelope::decode(b"{}").is_err());
+        // `once` wird nur geschrieben, wenn gesetzt (kompatibel zu älteren Clients)
+        assert!(!String::from_utf8(e.encode().unwrap()).unwrap().contains("once"));
+        let o = Envelope { content: Content::Message { parts: vec![], once: true }, ..e.clone() };
+        assert!(String::from_utf8(o.encode().unwrap()).unwrap().contains("\"once\":true"));
+        let r = Envelope {
+            content: Content::Receipt { receipt: ReceiptKind::Read, references: vec!["a".into()] },
+            ..e
+        };
+        let enc = String::from_utf8(r.encode().unwrap()).unwrap();
+        assert!(enc.contains("\"kind\":\"receipt\"") && enc.contains("\"receipt\":\"read\""), "{enc}");
+        assert_eq!(Envelope::decode(enc.as_bytes()).unwrap(), r);
     }
 }

@@ -27,6 +27,7 @@ fn one_to_one_and_group_lifecycle() {
         id: "1".into(),
         ts: 0,
         content: Content::Message {
+            once: false,
             parts: vec![Part::Code { lang: "sh".into(), body: "rm -rf /".into() }],
         },
     };

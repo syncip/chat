@@ -40,6 +40,7 @@ import chat.engine.Phase
 sealed interface Screen {
     data object List : Screen
     data class Chat(val id: String) : Screen
+    data class Channel(val id: String) : Screen
     data object Settings : Screen
 }
 
@@ -72,6 +73,7 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
     var screen by remember { mutableStateOf<Screen>(Screen.List) }
     var dialog by remember { mutableStateOf<String?>(null) } // new | group
     val s = state ?: return
+    if (!s.backupDone) BackupGate(vm, s)
 
     BackHandler(enabled = screen != Screen.List) { screen = Screen.List }
 
@@ -79,6 +81,10 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
         is Screen.Chat -> {
             val conv = s.conversations[sc.id]
             if (conv == null) screen = Screen.List else ChatScreen(vm, s, conv, onBack = { screen = Screen.List })
+        }
+        is Screen.Channel -> {
+            val ch = s.channels[sc.id]
+            if (ch == null) screen = Screen.List else ChannelScreen(vm, s, ch, onBack = { screen = Screen.List })
         }
         Screen.Settings -> SettingsScreen(vm, activity, s, onBack = { screen = Screen.List }, onSecureChanged = onSecureChanged)
         Screen.List -> Scaffold(
@@ -88,6 +94,8 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
                     actions = {
                         TextButton(onClick = { dialog = "new" }) { Text("＋") }
                         TextButton(onClick = { dialog = "group" }) { Text("👥") }
+                        TextButton(onClick = { dialog = "channel" }) { Text("📢") }
+                        TextButton(onClick = { dialog = "join" }) { Text("🔗") }
                         TextButton(onClick = { screen = Screen.Settings }) { Text("⚙") }
                     },
                 )
@@ -102,11 +110,24 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
                     items(requests, key = { it.id }) { c -> ConvRow(c, badge = "neu") { screen = Screen.Chat(c.id) } }
                     item { HorizontalDivider() }
                 }
-                if (list.isEmpty()) item {
+                if (list.isEmpty() && s.channels.isEmpty()) item {
                     Text(
                         "Noch keine Chats. Teile deinen Kontaktlink (⚙) oder öffne den Link eines Kontakts (＋).",
                         Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                items(s.channels.values.toList(), key = { "ch-" + it.id }) { ch ->
+                    Column(Modifier.fillMaxWidth().clickable { vm.run { vm.engine.markChannelRead(ch.id) }; screen = Screen.Channel(ch.id) }.padding(16.dp, 10.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("📢 ${ch.title}", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                            if (ch.unread > 0) Text(ch.unread.toString(), color = MaterialTheme.colorScheme.primary)
+                        }
+                        Text(
+                            when (ch.me.status) { "pending" -> "Wartet auf Freigabe"; "banned" -> "Gesperrt"; else -> "Öffentlicher Kanal" },
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                        )
+                    }
+                    HorizontalDivider()
                 }
                 items(list, key = { it.id }) { c ->
                     ConvRow(c, badge = if (c.unread > 0) c.unread.toString() else null) { vm.run { vm.engine.markRead(c.id) }; screen = Screen.Chat(c.id) }
@@ -117,6 +138,8 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
 
     when (dialog) {
         "new" -> StartChatDialog(vm, onClose = { dialog = null }, onStarted = { id -> dialog = null; screen = Screen.Chat(id) })
+        "channel" -> CreateChannelDialog(vm, onClose = { dialog = null }, onCreated = { id -> dialog = null; screen = Screen.Channel(id) })
+        "join" -> JoinChannelDialog(vm, onClose = { dialog = null }, onJoined = { id -> dialog = null; screen = Screen.Channel(id) })
         "group" -> NewGroupDialog(vm, s, onClose = { dialog = null }, onCreated = { id -> dialog = null; screen = Screen.Chat(id) })
     }
     LaunchedEffect(Unit) { /* Zustand wird vom ViewModel gehalten */ }

@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,6 +72,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
     val ctx = LocalContext.current
     var text by remember { mutableStateOf("") }
     var codeMode by remember { mutableStateOf(false) }
+    var once by remember { mutableStateOf(false) }
     var lang by remember { mutableStateOf("") }
     var reply by remember { mutableStateOf<Msg?>(null) }
     var editing by remember { mutableStateOf<Msg?>(null) }
@@ -113,9 +115,10 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
                     code = if (codeMode) lang to text else null,
                     quote = reply,
                     files = atts,
+                    once = once && conv.kind == "dm",
                 )
             }
-            text = ""; files = emptyList(); reply = null; codeMode = false
+            text = ""; files = emptyList(); reply = null; codeMode = false; once = false
             busy = false
         }
     }
@@ -145,7 +148,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
             }
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(conv.messages, key = { it.id }) { m ->
-                    MessageBubble(vm, conv, m, mine = m.from == me, onReply = { reply = m }, onEdit = {
+                    MessageBubble(vm, conv, m, mine = m.from == me, showDelivered = s.sendDelivered, showRead = s.sendRead, onReply = { reply = m }, onEdit = {
                         editing = m; text = m.parts.filterIsInstance<Part.Text>().firstOrNull()?.body ?: ""; codeMode = false
                     })
                 }
@@ -166,6 +169,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(enabled = editing == null, onClick = { pick.launch("*/*") }) { Text("📎") }
                         TextButton(enabled = editing == null, onClick = { codeMode = !codeMode }) { Text(if (codeMode) "</> ✓" else "</>") }
+                        if (conv.kind == "dm") TextButton(enabled = editing == null, onClick = { once = !once }) { Text(if (once) "🔒 ✓" else "🔒") }
                         Column(Modifier.weight(1f)) {
                             if (codeMode) OutlinedTextField(value = lang, onValueChange = { lang = it }, placeholder = { Text("Sprache") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                             OutlinedTextField(
@@ -203,8 +207,9 @@ private fun RequestBar(vm: AppViewModel, conv: Conversation, onGone: () -> Unit)
 }
 
 @Composable
-private fun MessageBubble(vm: AppViewModel, conv: Conversation, m: Msg, mine: Boolean, onReply: () -> Unit, onEdit: () -> Unit) {
+private fun MessageBubble(vm: AppViewModel, conv: Conversation, m: Msg, mine: Boolean, showDelivered: Boolean, showRead: Boolean, onReply: () -> Unit, onEdit: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
+    var shown by remember { mutableStateOf<List<Part>?>(null) }
     Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
         Surface(
             shape = RoundedCornerShape(14.dp),
@@ -217,13 +222,16 @@ private fun MessageBubble(vm: AppViewModel, conv: Conversation, m: Msg, mine: Bo
                     Text("Nachricht gelöscht", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     if (!mine) Text(m.from, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    m.parts.forEach { p ->
-                        when (p) {
-                            is Part.Quote -> Text(p.snippet, Modifier.padding(bottom = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3)
-                            is Part.Text -> Text(renderInline(p.body))
-                            is Part.Code -> CodeBlock(p)
-                            is Part.File -> FileCard(vm, p)
+                    if (m.once == true && !mine) {
+                        if (m.consumed == true && shown == null) {
+                            Text("🔒 Einmal-Nachricht gelesen", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            TextButton(onClick = { vm.run { shown = vm.engine.revealOnce(conv.id, m.id) } }) { Text("🔒 Einmal-Nachricht anzeigen") }
+                            Text("Wird nach dem Anzeigen gelöscht und dem Absender als gelesen gemeldet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                    } else {
+                        if (m.once == true) Text("🔒 Einmal-Nachricht" + (if (m.consumed == true) " (eigene Kopie entfernt)" else ""), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        PartsView(vm, m.parts)
                     }
                     if (m.reactions.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         m.reactions.forEach { (e, who) -> Text("$e ${who.size}", style = MaterialTheme.typography.labelMedium) }
@@ -232,7 +240,7 @@ private fun MessageBubble(vm: AppViewModel, conv: Conversation, m: Msg, mine: Bo
                 Text(
                     java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(m.ts)) +
                         (if (m.edited == true) " · bearbeitet" else "") + (if (m.expiresAt != null) " · ⏱" else "") +
-                        (if (mine) when (m.status) { "sending" -> " · sendet …"; "failed" -> " · fehlgeschlagen"; else -> " ✓" } else ""),
+                        (if (mine) statusLabel(m, showDelivered, showRead) else ""),
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -248,16 +256,59 @@ private fun MessageBubble(vm: AppViewModel, conv: Conversation, m: Msg, mine: Bo
             }
         }
     }
+    shown?.let { parts ->
+        AlertDialog(
+            onDismissRequest = { shown = null },
+            title = { Text("Einmal-Nachricht") },
+            text = {
+                Column {
+                    PartsView(vm, parts)
+                    Text("Diese Nachricht ist nur jetzt sichtbar. Beim Schließen ist sie unwiderruflich gelöscht.", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { Button(onClick = { shown = null }) { Text("Schließen und löschen") } },
+        )
+    }
+}
+
+/** Statusanzeige eigener Nachrichten. Empfangen/gelesen sieht nur, wer selbst die jeweilige Bestätigung sendet. */
+private fun statusLabel(m: Msg, showDelivered: Boolean, showRead: Boolean): String {
+    if (m.status == "sending") return " · sendet …"
+    if (m.status == "failed") return " · fehlgeschlagen"
+    var st = m.status
+    if (st == "read" && !showRead) st = if (showDelivered) "delivered" else "sent"
+    if (st == "delivered" && !showDelivered) st = "sent"
+    return when (st) { "read" -> " ✓✓ gelesen"; "delivered" -> " ✓✓ empfangen"; else -> " ✓ gesendet" }
+}
+
+/** Inhalte einer Nachricht (Text, einklappbarer Code, Zitat, Datei). */
+@Composable
+fun PartsView(vm: AppViewModel, parts: List<Part>) {
+    parts.forEach { p ->
+        when (p) {
+            is Part.Quote -> Text(p.snippet, Modifier.padding(bottom = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3)
+            is Part.Text -> Text(renderInline(p.body))
+            is Part.Code -> CodeBlock(p)
+            is Part.File -> FileCard(vm, p)
+        }
+    }
 }
 
 @Composable
 private fun CodeBlock(p: Part.Code) {
     val ctx = LocalContext.current
+    var open by remember { mutableStateOf(false) }
+    val lines = p.body.count { it == '\n' } + 1
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
         Column(Modifier.padding(8.dp)) {
-            if (p.lang.isNotEmpty()) Text(p.lang, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Box(Modifier.horizontalScroll(rememberScrollState())) { Text(p.body, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
-            TextButton(onClick = { copySensitive(ctx, p.body) }) { Text("Kopieren") }
+            Text(
+                (if (open) "▾ " else "▸ ") + "Code" + (if (p.lang.isNotEmpty()) " (${p.lang})" else "") + " · $lines Zeilen",
+                Modifier.clickable { open = !open }, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (open) {
+                Box(Modifier.horizontalScroll(rememberScrollState())) { Text(p.body, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+                TextButton(onClick = { copySensitive(ctx, p.body) }) { Text("Kopieren") }
+            }
         }
     }
 }

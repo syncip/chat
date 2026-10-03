@@ -35,7 +35,7 @@ import chat.android.SecureBlobStore
 import chat.engine.baseUrl
 
 @Composable
-private fun Field(label: String, value: String, onChange: (String) -> Unit, password: Boolean = false, hint: String? = null) {
+fun Field(label: String, value: String, onChange: (String) -> Unit, password: Boolean = false, hint: String? = null) {
     OutlinedTextField(
         value = value, onValueChange = onChange, label = { Text(label) }, singleLine = true,
         placeholder = hint?.let { { Text(it) } },

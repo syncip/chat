@@ -76,7 +76,8 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
     val link = vm.engine.contactLink(baseUrl(s.me.domain))
     val lim = vm.engine.info?.limits
 
-    LaunchedEffect(Unit) { runCatching { quota = vm.engine.quota() } }
+    var devices by remember { mutableStateOf<List<chat.engine.DeviceInfo>>(emptyList()) }
+    LaunchedEffect(Unit) { runCatching { quota = vm.engine.quota() }; runCatching { devices = vm.engine.listDevices() } }
     fun run(ok: String = "", f: suspend () -> Unit) { msg = ""; vm.run(onError = { msg = it }) { f(); if (ok.isNotEmpty()) msg = ok } }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Einstellungen") }, navigationIcon = { TextButton(onClick = onBack) { Text("←") } }) }) { pad ->
@@ -121,6 +122,21 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
             Section("Netzwerk")
             SwitchRow("Direkt an Empfänger-Server senden (der Ziel-Server sieht dann deine IP; ein VPN/Tor wird empfohlen)", s.directSend) { run { vm.engine.setDirectSend(it) } }
 
+            Section("Bestätigungen & Einmal-Nachrichten")
+            Text("Nur in privaten Chats. Wer „Empfangen“/„Gelesen“ ausschaltet, sieht die der anderen auch nicht (gegenseitig).", style = MaterialTheme.typography.bodySmall)
+            SwitchRow("„Empfangen“ senden", s.sendDelivered) { run { vm.engine.setReceiptSettings(sendDelivered = it) } }
+            SwitchRow("„Gelesen“ senden", s.sendRead) { run { vm.engine.setReceiptSettings(sendRead = it) } }
+            SwitchRow("Einmal-Nachrichten: eigene Kopie sofort entfernen", s.onceDropOwnCopy) { run { vm.engine.setReceiptSettings(onceDropOwnCopy = it) } }
+
+            Section("Geräte")
+            Text("Dein Konto kann auf mehreren Geräten gleichzeitig aktiv sein. Neue Geräte meldest du mit der Backup-Datei an.", style = MaterialTheme.typography.bodySmall)
+            devices.forEach { d ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(d.id + if (d.current) " (dieses Gerät)" else "", Modifier.weight(1f), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                    if (!d.current) TextButton(onClick = { run("Gerät widerrufen.") { vm.engine.revokeDevice(d.id); devices = vm.engine.listDevices() } }) { Text("Widerrufen") }
+                }
+            }
+
             Section("Sicherheit")
             SwitchRow("Screenshots und Bildschirmaufnahme verhindern", secure) { secure = it; prefs.secureScreen = it; onSecureChanged() }
             SwitchRow("Verbindung im Hintergrund halten, solange entsperrt", keep) {
@@ -160,7 +176,7 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
             if (invite.isNotEmpty()) Text(invite, style = MaterialTheme.typography.bodyMedium)
 
             Section("Backup & Sitzung")
-            Text("Das Backup ist mit der Passphrase verschlüsselt und mit dem Web-Client kompatibel. Auf zwei Geräten gleichzeitig verwenden führt zu defekter Verschlüsselung (noch kein Multi-Device).", style = MaterialTheme.typography.bodySmall)
+            Text("Das Backup ist mit der Passphrase verschlüsselt und mit dem Web-Client kompatibel. Mit der Backup-Datei meldest du dich auf einem weiteren Gerät an (Multi-Device); sie enthält deinen Konto-Schlüssel und gehört nur in deine Hände.", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
                     if (backupPass.length < 10) { msg = "Die Passphrase braucht mindestens 10 Zeichen."; return@OutlinedButton }

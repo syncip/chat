@@ -32,6 +32,23 @@ Zusatzdateien** in [deploy/](deploy/README.md), kein Teil der App. Zu Cloudflare
 > Das Dockerfile konnte in der Entwicklungsumgebung nicht gebaut werden (kein Docker-Daemon). Die Einzelschritte
 > (Rust→WASM, Web-Build, Go-Build) sind aber getestet; bitte den ersten Image-Build prüfen.
 
+## Betrieb ohne Domain (IP:PORT)
+
+Der Chat läuft auch ohne Domain und ohne TLS, z. B. im LAN oder VPN. Adressen lauten dann `alice@192.168.1.10:8080`.
+
+```bash
+# .env
+CHAT_DOMAIN=192.168.1.10:8080      # IP:PORT, exakt so, wie die Nutzer den Server erreichen (Port = veröffentlichter Port)
+CHAT_BIND=0.0.0.0:8080             # im LAN erreichbar (Standard ist nur 127.0.0.1)
+CHAT_FEDERATION_ALLOW_PRIVATE=true # nur nötig, wenn mehrere Server in privaten Netzen föderieren sollen
+```
+
+- Server mit IP-Adresse werden automatisch über `http` angesprochen (für IPs gibt es keine TLS-Zertifikate).
+- **Ohne TLS ist die App selbst angreifbar:** Nachrichten bleiben Ende-zu-Ende verschlüsselt, aber jemand im Netzwerk kann
+  den ausgelieferten Client manipulieren und Schlüssel abgreifen. Die App zeigt dazu einen Warnhinweis. Nur in vertrauenswürdigen Netzen nutzen.
+- Die Adresse ist Teil der Identität: Ändert sich die IP oder der Port, ändern sich alle Adressen (Konten ziehen nicht automatisch um).
+- IPv6-Adressen werden noch nicht unterstützt. Hinter NAT/Port-Mapping muss `CHAT_DOMAIN` mit dem von außen erreichbaren `IP:PORT` übereinstimmen.
+
 ## Entwicklung
 
 ```bash
@@ -56,6 +73,7 @@ Benötigt: Rust (+ `wasm32-unknown-unknown`, `wasm-bindgen-cli 0.2.129`), Go ≥
 | `CHAT_USER_QUOTA` | 10 GB | pro Nutzer |
 | `CHAT_MAX_MESSAGE_ATTACHMENTS` / `…_TOTAL_SIZE` | 10 / 500 MB | pro Nachricht (clientseitig durchgesetzt) |
 | `CHAT_BLOB_RETENTION_DAYS`, `CHAT_MESSAGE_RETENTION_DAYS` | 30 | Aufbewahrung |
+| `CHAT_FEDERATION_ALLOW_PRIVATE` | `false` | Föderation mit privaten/lokalen Adressen (LAN) erlauben |
 | `CHAT_TRUST_PROXY_HEADER` | – | Header mit Client-IP hinter Tunnel/Proxy (nur für Rate-Limits) |
 
 ## Dokumente

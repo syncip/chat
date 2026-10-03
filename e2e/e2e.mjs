@@ -4,13 +4,13 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { chromium, CHROME as EXE, sleep, startServer, waitUp, register } from './helpers.mjs';
+import { H, chromium, CHROME as EXE, sleep, startServer, waitUp, register } from './helpers.mjs';
 
 const servers = [startServer(18080), startServer(18081)];
 let browser;
 try {
   await Promise.all([waitUp(18080), waitUp(18081)]);
-  browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox'] });
+  browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox', '--no-proxy-server'] });
   const ctxA = await browser.newContext({ acceptDownloads: true });
   const ctxB = await browser.newContext({ acceptDownloads: true });
   const alice = await ctxA.newPage();
@@ -32,7 +32,7 @@ try {
   await bob.getByTitle('Neuer Chat').click();
   await bob.getByPlaceholder('https://…/#/add/…').fill(link);
   await bob.getByRole('button', { name: 'Chat starten' }).click();
-  await bob.locator('.conv .title', { hasText: 'alice@localhost:18080' }).waitFor({ timeout: 20000 });
+  await bob.locator('.conv .title', { hasText: `alice@${H}:18080` }).waitFor({ timeout: 20000 });
   console.log('✔ Bob startet Chat mit Alice (über Server-Grenze)');
 
   // Alice erhält Anfrage und nimmt an
@@ -84,9 +84,9 @@ try {
 
   // Blockieren: Alice blockiert Bob → neue Nachricht kommt nicht mehr an
   await alice.getByTitle('Einstellungen').click();
-  await alice.getByPlaceholder('name@server', { exact: true }).fill('bob@localhost:18081');
+  await alice.getByPlaceholder('name@server', { exact: true }).fill(`bob@${H}:18081`);
   await alice.getByRole('button', { name: 'Hinzufügen' }).first().click();
-  await alice.getByText('bob@localhost:18081').first().waitFor();
+  await alice.getByText(`bob@${H}:18081`).first().waitFor();
   await alice.keyboard.press('Escape');
   await bob.getByPlaceholder('Nachricht schreiben …').fill('nach dem Blockieren');
   await bob.getByPlaceholder('Nachricht schreiben …').press('Enter');

@@ -60,3 +60,9 @@ jobs:
           CHATD: ${{ github.workspace }}/server/chatd
           WEB_DIR: ${{ github.workspace }}/web/dist
         run: node e2e.mjs && node e2e-group.mjs
+      - name: E2E über IP:PORT (unsicherer Kontext, kein TLS)
+        working-directory: e2e
+        env:
+          CHATD: ${{ github.workspace }}/server/chatd
+          WEB_DIR: ${{ github.workspace }}/web/dist
+        run: CHAT_HOST=$(hostname -I | awk '{print $1}') node e2e.mjs

@@ -1,4 +1,5 @@
 import init, * as wasm from '../wasm/chat_core.js';
+import { setHasher } from './util';
 
 export type Core = typeof wasm;
 export type { Client, Vault } from '../wasm/chat_core.js';
@@ -7,6 +8,9 @@ let ready: Promise<Core> | null = null;
 
 /** Lädt den Krypto-Kern (Rust/WASM) genau einmal. */
 export function loadCore(): Promise<Core> {
-  ready ??= init().then(() => wasm);
+  ready ??= init().then(() => {
+    setHasher((b) => wasm.sha256(b));
+    return wasm;
+  });
   return ready;
 }

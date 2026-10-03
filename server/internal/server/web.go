@@ -20,6 +20,9 @@ func (s *Server) webHandler() http.Handler {
 	if x := strings.TrimSpace(s.cfg.CSPConnectExtra); x != "" && !strings.ContainsAny(x, ";\n\r") {
 		extra = " " + x
 	}
+	if isIPHost(s.cfg.Domain) { // Betrieb über IP:PORT ohne TLS: Verbindungen zu anderen IP-Servern per http/ws erlauben
+		extra += " http: ws:"
+	}
 	csp := fmt.Sprintf(cspTmpl, extra)
 	fsrv := http.FileServer(http.Dir(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@
 #   1. cp .env.example .env   und CHAT_DOMAIN, CHAT_ADMIN_KEY anpassen
 #   2. docker compose up -d --build
 #   3. Erste Einladung (24 h gültig):  docker compose logs chat | grep Einladung
+# Ohne Domain: CHAT_DOMAIN=<IP>:<PORT> und CHAT_BIND=0.0.0.0:<PORT> setzen (siehe README).
 # Die App ist unabhängig von Tunneln. Optionale Tunnel-Beispiele: deploy/ (siehe deploy/README.md).
 services:
   chat:
@@ -17,6 +18,7 @@ services:
       CHAT_USER_INVITES: ${CHAT_USER_INVITES:-false}           # dürfen Nutzer Einladungen erzeugen?
       CHAT_FEDERATION: ${CHAT_FEDERATION:-open}                # open | allowlist | closed
       CHAT_FEDERATION_ALLOW: ${CHAT_FEDERATION_ALLOW:-}        # kommagetrennt, bei allowlist
+      CHAT_FEDERATION_ALLOW_PRIVATE: ${CHAT_FEDERATION_ALLOW_PRIVATE:-false}  # LAN-Föderation (private IPs) erlauben
       CHAT_FEDERATION_BLOCK: ${CHAT_FEDERATION_BLOCK:-}        # kommagetrennt
       # Limits (Bytes)
       CHAT_MAX_FILE_SIZE: ${CHAT_MAX_FILE_SIZE:-104857600}                    # 100 MB pro Datei

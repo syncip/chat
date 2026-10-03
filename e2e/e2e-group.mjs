@@ -1,12 +1,12 @@
 // Gruppen-E2E: Alice (Server A), Carol (Server A), Bob (Server B). Alice erstellt eine Gruppe mit Bob und Carol.
 import assert from 'node:assert/strict';
-import { chromium, CHROME, startServer, waitUp, register, contactLink, connect, send, seen, sleep } from './helpers.mjs';
+import { H, chromium, CHROME, startServer, waitUp, register, contactLink, connect, send, seen, sleep } from './helpers.mjs';
 
 const servers = [startServer(18090), startServer(18091)];
 let browser;
 try {
   await Promise.all([waitUp(18090), waitUp(18091)]);
-  browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox'] });
+  browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox', '--no-proxy-server'] });
   const mk = async () => (await browser.newContext()).newPage();
   const [alice, bob, carol] = [await mk(), await mk(), await mk()];
   await register(alice, 18090, 'alice');
@@ -14,15 +14,15 @@ try {
   await register(bob, 18091, 'bob');
 
   const la = await contactLink(alice);
-  await connect(bob, alice, la, 'bob@localhost:18091');
-  await connect(carol, alice, la, 'carol@localhost:18090');
+  await connect(bob, alice, la, `bob@${H}:18091`);
+  await connect(carol, alice, la, `carol@${H}:18090`);
   console.log('✔ Alice ist mit Bob (föderiert) und Carol verbunden');
 
   // Gruppe erstellen
   await alice.getByTitle('Neue Gruppe').click();
   await alice.getByLabel('Name').fill('Projekt X');
-  await alice.getByLabel('bob@localhost:18091').check();
-  await alice.getByLabel('carol@localhost:18090').check();
+  await alice.getByLabel(`bob@${H}:18091`).check();
+  await alice.getByLabel(`carol@${H}:18090`).check();
   await alice.getByRole('button', { name: 'Gruppe erstellen' }).click();
   await alice.locator('.chat-header strong', { hasText: 'Projekt X' }).waitFor();
 
@@ -47,7 +47,7 @@ try {
 
   // Mitglied entfernen: danach erhält Carol nichts mehr
   await alice.getByLabel('Details').click();
-  await alice.locator('li', { hasText: 'carol@localhost:18090' }).getByRole('button', { name: 'Entfernen' }).click();
+  await alice.locator('li', { hasText: `carol@${H}:18090` }).getByRole('button', { name: 'Entfernen' }).click();
   await sleep(1500);
   await alice.keyboard.press('Escape');
   await send(alice, 'geheim nach Entfernung');

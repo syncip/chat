@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { formatBytes } from '../lib/util';
+import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
 import { Dialog } from './Dialog';
 
@@ -43,7 +43,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
             <p className="muted small">Wer diesen Link hat, kann dir eine Chat-Anfrage schicken. Du entscheidest, ob du sie annimmst.</p>
             <input readOnly value={link} onFocus={(x) => x.target.select()} />
             <div className="row">
-              <button onClick={() => run(() => navigator.clipboard.writeText(link), 'Link kopiert.')}>Kopieren</button>
+              <button onClick={() => run(() => copyText(link), 'Link kopiert.')}>Kopieren</button>
               <button onClick={() => run(() => e.setIntroEnabled(false), 'Kontaktlink deaktiviert (nur noch bestehende Kontakte).')}>Deaktivieren</button>
               <button onClick={() => run(async () => { await e.setIntroEnabled(false); await e.setIntroEnabled(true); }, 'Neuer Link erzeugt, der alte ist ungültig.')}>Neu erzeugen</button>
             </div>

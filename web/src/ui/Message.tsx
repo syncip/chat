@@ -1,6 +1,6 @@
 import { Fragment, useState, type ReactNode } from 'react';
 import type { Msg, Part } from '../lib/types';
-import { formatBytes } from '../lib/util';
+import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
 
 /** Sehr kleines, sicheres Markdown-Subset: `code`, **fett**, *kursiv*, https-Links. Niemals HTML. */
@@ -86,7 +86,7 @@ export function MessageView({
               <pre className="code" data-lang={p.lang || undefined}>
                 {p.lang && <span className="lang">{p.lang}</span>}
                 <code>{p.body}</code>
-                <button className="copy link" onClick={() => navigator.clipboard?.writeText(p.body)}>Kopieren</button>
+                <button className="copy link" onClick={() => void copyText(p.body).catch(() => undefined)}>Kopieren</button>
               </pre>
             )}
             {p.type === 'file' && <FilePart p={p} />}

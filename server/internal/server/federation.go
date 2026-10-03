@@ -84,8 +84,17 @@ func newFederation(s *Server) *federation {
 	}
 }
 
+// isIPHost: Server ohne Domain, erreichbar über IP:PORT (kein TLS-Zertifikat möglich → http).
+func isIPHost(domain string) bool {
+	host := domain
+	if i := strings.LastIndex(domain, ":"); i >= 0 {
+		host = domain[:i]
+	}
+	return net.ParseIP(host) != nil
+}
+
 func (f *federation) base(domain string) string {
-	if f.s.cfg.FedInsecure {
+	if f.s.cfg.FedInsecure || isIPHost(domain) {
 		return "http://" + domain
 	}
 	return "https://" + domain

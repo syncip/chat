@@ -62,7 +62,7 @@ func Load() (*Config, error) {
 		Federation:       env("CHAT_FEDERATION", "open"),
 		FedAllow:         envList("CHAT_FEDERATION_ALLOW"),
 		FedBlock:         envList("CHAT_FEDERATION_BLOCK"),
-		FedInsecure:      envBool("CHAT_FEDERATION_INSECURE_HTTP", false),
+		FedInsecure:      envBool("CHAT_FEDERATION_INSECURE_HTTP", false) || envBool("CHAT_FEDERATION_ALLOW_PRIVATE", false),
 		TrustProxyHdr:    env("CHAT_TRUST_PROXY_HEADER", ""),
 		CSPConnectExtra:  env("CHAT_CSP_CONNECT_EXTRA", ""),
 		RatePerMinute:    int(envInt("CHAT_RATE_PER_MINUTE", 600)),

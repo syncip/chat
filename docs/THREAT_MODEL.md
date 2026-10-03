@@ -43,6 +43,9 @@
 - **Rechtliche/organisatorische Angriffe** (Zwang zur Herausgabe) liefern dem Server-Betreiber
   nur verschlüsselte Blobs und minimale Zustellmetadaten.
 
+- **Betrieb ohne TLS (IP:PORT):** Ohne TLS kann ein Angreifer im Netzwerk den Web-Client austauschen (Schlüsseldiebstahl) und sieht
+  alle Verkehrsmetadaten samt IPs. Inhalte der Nachrichten bleiben bei unverändertem Client geschützt. Nur in vertrauenswürdigen Netzen (LAN/VPN) verwenden.
+
 ## Grundprinzipien
 
 - Keine eigene Kryptografie: nur standardisierte Protokolle (MLS RFC 9420) und geprüfte Bibliotheken.

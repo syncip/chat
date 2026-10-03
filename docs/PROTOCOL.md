@@ -169,6 +169,11 @@ ohne direkten Kontakt nicht). Regeln: Selbst-Ankündigungen überschreiben immer
 Dateigröße, Kontingent, Aufbewahrung und Envelope-Größe erzwingt der **Server**. „Dateien pro Nachricht“, „Gesamtgröße pro Nachricht“
 und „Text pro Nachricht“ erzwingt der **Client** (der Server sieht Nachrichten nicht); Werte stehen in `GET /v1/server-info`.
 
+### Server ohne Domain (IP:PORT)
+Adressen `name@1.2.3.4:8080` sind gültig. Server mit IP-Adresse werden per `http` angesprochen (Client und Föderation).
+Ohne TLS ist der ausgelieferte Web-Client manipulierbar (siehe THREAT_MODEL); der Client nutzt deshalb für SHA-256 den WASM-Kern statt WebCrypto
+(das in unsicheren Kontexten fehlt) und warnt in der Oberfläche. IPv6-Literale sind nicht unterstützt.
+
 ### Offen / bekannte Einschränkungen
 - **Multi-Device** (Abschnitt 9): noch nicht umgesetzt (1 Gerät pro Konto, Backup-Datei).
 - **Key Transparency** und **Post-Quanten-Ciphersuite**: nicht umgesetzt (Roadmap). Bis dahin: Safety Numbers vergleichen.

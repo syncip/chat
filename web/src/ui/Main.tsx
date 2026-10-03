@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { decodeCard } from '../lib/engine';
+import { isInsecureTransport } from '../lib/util';
 import { useEngine } from './hooks';
 import { ChatView } from './ChatView';
 import { Settings } from './Settings';
@@ -37,7 +38,13 @@ export function Main() {
   const current = active ? s.conversations[active] : undefined;
 
   return (
-    <div className={`layout ${current ? 'chat-open' : ''}`}>
+    <div className={`layout ${current ? 'chat-open' : ''} ${isInsecureTransport() ? 'with-warning' : ''}`}>
+      {isInsecureTransport() && (
+        <div className="transport-warning" role="alert">
+          ⚠ Unverschlüsselte Verbindung (http, kein TLS): Nachrichten bleiben Ende-zu-Ende verschlüsselt, aber ein Angreifer im Netzwerk
+          kann die App selbst manipulieren und Schlüssel abgreifen. Nur in vertrauenswürdigen Netzen (LAN/VPN) nutzen.
+        </div>
+      )}
       <aside className="sidebar">
         <header>
           <div>

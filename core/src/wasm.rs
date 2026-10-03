@@ -200,3 +200,10 @@ pub fn envelope_open(key: &[u8], blob: &[u8]) -> Result<js_sys::Array, JsError> 
     a.push(&js_sys::Uint8Array::from(&p[..]));
     Ok(a)
 }
+
+/// SHA-256 ohne WebCrypto (steht in unsicheren Kontexten wie http://IP:PORT nicht zur Verfügung).
+#[wasm_bindgen]
+pub fn sha256(data: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(data).to_vec()
+}

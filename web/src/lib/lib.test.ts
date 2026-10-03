@@ -18,6 +18,9 @@ describe('util', () => {
   it('baseUrl: https außer lokal', () => {
     expect(baseUrl('chat.example.org')).toBe('https://chat.example.org');
     expect(baseUrl('localhost:8080')).toBe('http://localhost:8080');
+    expect(baseUrl('192.168.1.10:8080')).toBe('http://192.168.1.10:8080');
+    expect(baseUrl('203.0.113.7:8443')).toBe('http://203.0.113.7:8443');
+    expect(splitAddress('alice@192.168.1.10:8080')).toEqual({ name: 'alice', domain: '192.168.1.10:8080' });
   });
   it('formatBytes', () => {
     expect(formatBytes(512)).toBe('512 B');

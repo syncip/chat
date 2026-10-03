@@ -24,8 +24,39 @@ export function unhex(s: string): Uint8Array {
   return out;
 }
 
+let wasmHasher: ((b: Uint8Array) => Uint8Array) | null = null;
+
+/** Der WASM-Kern liefert SHA-256 auch dort, wo WebCrypto fehlt (http://IP:PORT ist kein „secure context“). */
+export function setHasher(f: (b: Uint8Array) => Uint8Array): void {
+  wasmHasher = f;
+}
+
 export async function sha256(b: Uint8Array): Promise<Uint8Array> {
+  if (wasmHasher) return wasmHasher(b);
   return new Uint8Array(await crypto.subtle.digest('SHA-256', b as BufferSource));
+}
+
+/** Kopieren, auch ohne Clipboard-API (unsicherer Kontext). */
+export async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand('copy');
+  ta.remove();
+  if (!ok) throw new Error('Kopieren nicht möglich – bitte manuell markieren.');
+}
+
+/** Läuft die App ohne TLS (außer localhost)? Dann kann ein Angreifer im Netz den Client manipulieren. */
+export function isInsecureTransport(): boolean {
+  const h = location.hostname;
+  return location.protocol === 'http:' && h !== 'localhost' && h !== '127.0.0.1' && h !== '[::1]';
 }
 
 export function randomBytes(n: number): Uint8Array {
@@ -42,11 +73,11 @@ export function splitAddress(a: string): { name: string; domain: string } | null
   return m ? { name: m[1], domain: m[2] } : null;
 }
 
-/** Schema für Server-URLs: https, außer für lokale Entwicklung. */
+/** Schema für Server-URLs: https für Domains; http für localhost und IP-Adressen (IP:PORT, kein Zertifikat möglich). */
 export function baseUrl(domain: string): string {
   const host = domain.split(':')[0];
-  const local = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
-  return `${local ? 'http' : 'https'}://${domain}`;
+  const plain = host === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+  return `${plain ? 'http' : 'https'}://${domain}`;
 }
 
 export function formatBytes(n: number): string {

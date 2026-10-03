@@ -20,14 +20,14 @@ Android- und iOS-Clients dieselbe API und denselben Krypto-Kern nutzen können.
 ## Schnellstart
 
 ```bash
-export CHAT_ADMIN_KEY=$(openssl rand -hex 24)
-# deploy/docker-compose.yml: CHAT_DOMAIN auf den öffentlichen Hostnamen setzen
-docker compose -f deploy/docker-compose.yml up -d --build
-docker compose -f deploy/docker-compose.yml logs chat | grep Einladung   # erste Einladung (24 h gültig)
+cp .env.example .env            # CHAT_DOMAIN und CHAT_ADMIN_KEY anpassen
+docker compose up -d --build
+docker compose logs chat | grep Einladung   # erste Einladung (24 h gültig)
+# optional mit Tunnel:  docker compose --profile pangolin up -d   |   --profile cloudflare
 ```
 
 Weitere Einladungen: `curl -X POST -H "X-Admin-Key: $CHAT_ADMIN_KEY" https://DEINE-DOMAIN/v1/admin/invites`.
-Betrieb hinter Pangolin oder Cloudflare Tunnel: siehe Kommentare in [deploy/docker-compose.yml](deploy/docker-compose.yml)
+Betrieb hinter Pangolin oder Cloudflare Tunnel: siehe Profile in [docker-compose.yml](docker-compose.yml)
 und den Hinweis zu Cloudflare in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 > Das Dockerfile konnte in der Entwicklungsumgebung nicht gebaut werden (kein Docker-Daemon). Die Einzelschritte

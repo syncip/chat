@@ -1,0 +1,64 @@
+# Chat-Server inkl. Web-Client.
+#   1. cp .env.example .env   und CHAT_DOMAIN, CHAT_ADMIN_KEY anpassen
+#   2. docker compose up -d --build
+#   3. Erste Einladung (24 h gültig):  docker compose logs chat | grep Einladung
+# Tunnel (optional):  docker compose --profile cloudflare up -d   |   docker compose --profile pangolin up -d
+services:
+  chat:
+    build: .
+    image: syncip/chat:latest
+    restart: unless-stopped
+    environment:
+      # Pflicht
+      CHAT_DOMAIN: ${CHAT_DOMAIN:?CHAT_DOMAIN setzen (öffentlicher Hostname, Teil der Adressen name@domain)}
+      CHAT_ADMIN_KEY: ${CHAT_ADMIN_KEY:?CHAT_ADMIN_KEY setzen (z. B. openssl rand -hex 24)}
+      # Zugang und Föderation
+      CHAT_REGISTRATION: ${CHAT_REGISTRATION:-invite}          # invite | open | closed
+      CHAT_USER_INVITES: ${CHAT_USER_INVITES:-false}           # dürfen Nutzer Einladungen erzeugen?
+      CHAT_FEDERATION: ${CHAT_FEDERATION:-open}                # open | allowlist | closed
+      CHAT_FEDERATION_ALLOW: ${CHAT_FEDERATION_ALLOW:-}        # kommagetrennt, bei allowlist
+      CHAT_FEDERATION_BLOCK: ${CHAT_FEDERATION_BLOCK:-}        # kommagetrennt
+      # Limits (Bytes)
+      CHAT_MAX_FILE_SIZE: ${CHAT_MAX_FILE_SIZE:-104857600}                    # 100 MB pro Datei
+      CHAT_MAX_MESSAGE_ATTACHMENTS: ${CHAT_MAX_MESSAGE_ATTACHMENTS:-10}       # Dateien pro Nachricht
+      CHAT_MAX_MESSAGE_TOTAL_SIZE: ${CHAT_MAX_MESSAGE_TOTAL_SIZE:-524288000}  # Gesamtgröße pro Nachricht
+      CHAT_USER_QUOTA: ${CHAT_USER_QUOTA:-10737418240}                        # 10 GB pro Nutzer
+      CHAT_BLOB_RETENTION_DAYS: ${CHAT_BLOB_RETENTION_DAYS:-30}
+      CHAT_MESSAGE_RETENTION_DAYS: ${CHAT_MESSAGE_RETENTION_DAYS:-30}
+      # Hinter Tunnel/Proxy: Header mit der Client-IP (nur für Rate-Limits, es wird nichts geloggt).
+      # Pangolin/Traefik: X-Forwarded-For   Cloudflare: CF-Connecting-IP
+      CHAT_TRUST_PROXY_HEADER: ${CHAT_TRUST_PROXY_HEADER:-X-Forwarded-For}
+    volumes:
+      - chat-data:/data
+    ports:
+      - "${CHAT_BIND:-127.0.0.1:8080}:8080"   # lokal; öffentlich nur über Tunnel/Reverse-Proxy mit TLS
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # Cloudflare Tunnel (Cloudflare sieht Verkehrsmetadaten, siehe docs/THREAT_MODEL.md).
+  # Im Cloudflare-Dashboard: Public Hostname → Service http://chat:8080; CHAT_TRUST_PROXY_HEADER=CF-Connecting-IP.
+  cloudflared:
+    profiles: [cloudflare]
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
+    restart: unless-stopped
+    depends_on: [chat]
+
+  # Pangolin (selbst gehostet, empfohlen). In Pangolin eine Ressource mit Ziel http://chat:8080 anlegen.
+  # Image und Variablen bitte mit der aktuellen Pangolin-Dokumentation abgleichen.
+  newt:
+    profiles: [pangolin]
+    image: fosrl/newt:latest
+    environment:
+      PANGOLIN_ENDPOINT: ${PANGOLIN_ENDPOINT:-}
+      NEWT_ID: ${NEWT_ID:-}
+      NEWT_SECRET: ${NEWT_SECRET:-}
+    restart: unless-stopped
+    depends_on: [chat]
+
+volumes:
+  chat-data:

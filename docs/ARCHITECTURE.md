@@ -19,7 +19,7 @@
 - **core/** (Rust): MLS, Schlüsselverwaltung, Datei-Verschlüsselung, Nachrichtenformat. Wiederverwendet von allen Clients.
 - **web/** (TypeScript, React, Vite): UI, PWA, lädt `core` als WASM.
 - **api/**: OpenAPI-Spezifikation.
-- **deploy/**: Dockerfile, `docker-compose.yml`, Beispiel-Konfigurationen.
+- **Dockerfile**, **docker-compose.yml**, **.env.example** im Repo-Root.
 
 ## Tech-Entscheidungen
 
@@ -54,6 +54,6 @@ chat/
 ├─ core/        (Rust)
 ├─ server/      (Go)
 ├─ web/         (TS/React)
-├─ deploy/
+├─ Dockerfile, docker-compose.yml
 └─ docs/
 ```

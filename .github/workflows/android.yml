@@ -54,3 +54,22 @@ jobs:
         run: grep -h -A4 "Error:" android/app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt | head -80 || true
       - uses: actions/upload-artifact@v4
         with: { name: chat-debug-apk, path: android/app/build/outputs/apk/debug/*.apk }
+      # Release-APK (R8, signiert). Mit dem Repository-Secret ANDROID_KEYSTORE_B64 (+ _PASSWORD, _ALIAS) wird der eigene Schlüssel genutzt,
+      # sonst ein einmaliger Wegwerf-Schlüssel (nur zum Ausprobieren; Updates sind dann nur mit demselben Schlüssel möglich).
+      - name: Release-APK bauen
+        working-directory: android
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          KS="$RUNNER_TEMP/release.jks"
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$KS"; PASS="$KS_PASS"; ALIAS="$KS_ALIAS"
+          else
+            PASS="$(openssl rand -hex 16)"; ALIAS=chat
+            keytool -genkeypair -keystore "$KS" -storepass "$PASS" -keypass "$PASS" -alias "$ALIAS" -keyalg EC -groupname secp256r1 -validity 3650 -dname "CN=Chat Test Build"
+          fi
+          CHAT_KEYSTORE="$KS" CHAT_KEYSTORE_PASSWORD="$PASS" CHAT_KEY_ALIAS="$ALIAS" CHAT_KEY_PASSWORD="$PASS" ./gradlew :app:assembleRelease
+      - uses: actions/upload-artifact@v4
+        with: { name: chat-release-apk, path: android/app/build/outputs/apk/release/*.apk }

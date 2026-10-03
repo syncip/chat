@@ -122,7 +122,7 @@ func Open(dir string) (*Store, error) {
 			return nil, err
 		}
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + channelSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
 	st := &Store{db}

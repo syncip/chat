@@ -46,6 +46,7 @@ func newNode(t *testing.T, mod func(*config.Config)) *node {
 		MaxEnvelopeSize: 64 << 10, UserQuota: 3 << 20, BlobRetention: time.Hour, MessageRetention: time.Hour,
 		Federation: "open", FedInsecure: true, RatePerMinute: 100000, MaxMailboxes: 50, MaxKeyPackages: 5,
 		UserInvites: true, RegistrationPoW: 8, MaxDevices: 10,
+		Channels: true, MaxChannels: 10, MaxChannelUsers: 100, MaxPostSize: 64 << 10, ChannelRetention: time.Hour,
 	}
 	if mod != nil {
 		mod(cfg)

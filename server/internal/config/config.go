@@ -40,6 +40,13 @@ type Config struct {
 	MaxMailboxes    int
 	MaxKeyPackages  int
 	MaxDevices      int // aktive Geräte pro Konto
+
+	// Öffentliche Kanäle
+	Channels         bool
+	MaxChannels      int // pro Nutzer
+	MaxChannelUsers  int // Mitglieder pro Kanal
+	MaxPostSize      int
+	ChannelRetention time.Duration
 }
 
 func Load() (*Config, error) {
@@ -70,6 +77,11 @@ func Load() (*Config, error) {
 		MaxMailboxes:     int(envInt("CHAT_MAX_MAILBOXES", 5000)),
 		MaxKeyPackages:   int(envInt("CHAT_MAX_KEYPACKAGES", 200)),
 		MaxDevices:       int(envInt("CHAT_MAX_DEVICES", 10)),
+		Channels:         envBool("CHAT_CHANNELS", true),
+		MaxChannels:      int(envInt("CHAT_MAX_CHANNELS", 10)),
+		MaxChannelUsers:  int(envInt("CHAT_MAX_CHANNEL_MEMBERS", 5000)),
+		MaxPostSize:      int(envInt("CHAT_MAX_POST_SIZE", 128<<10)),
+		ChannelRetention: envDays("CHAT_CHANNEL_RETENTION_DAYS", 90),
 	}
 	switch c.Registration {
 	case "invite", "open", "closed":

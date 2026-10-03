@@ -35,6 +35,7 @@ type Server struct {
 	log      *slog.Logger
 	key      ed25519.PrivateKey
 	hub      *hub
+	chans    *chanHub
 	nonces   *nonceCache
 	limiter  *limiter
 	fed      *federation
@@ -49,6 +50,7 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Server, error)
 	s := &Server{
 		cfg: cfg, st: st, log: log,
 		hub:     newHub(),
+		chans:   newChanHub(),
 		nonces:  newNonceCache(5 * time.Minute),
 		limiter: newLimiter(cfg.RatePerMinute),
 		blobDir: filepath.Join(cfg.DataDir, "blobs"),
@@ -124,6 +126,19 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /v1/blobs/{id}", s.auth(s.deleteBlob))
 	m.HandleFunc("GET /v1/quota", s.auth(s.quota))
 	m.HandleFunc("GET /v1/stream", s.stream)
+	// Kanäle
+	m.HandleFunc("POST /v1/channels", s.auth(s.createChannel))
+	m.HandleFunc("GET /v1/channels/{id}", s.channelInfo)
+	m.HandleFunc("GET /v1/channels/{id}/captcha", s.channelCaptcha)
+	m.HandleFunc("GET /v1/channels/{id}/stream", s.channelStream)
+	m.HandleFunc("POST /v1/channels/{id}/join", s.chanAuth(s.channelJoin))
+	m.HandleFunc("GET /v1/channels/{id}/log", s.chanAuth(s.channelLog))
+	m.HandleFunc("POST /v1/channels/{id}/posts", s.chanAuth(s.channelPost))
+	m.HandleFunc("POST /v1/channels/{id}/mod", s.chanAuth(s.channelMod))
+	m.HandleFunc("GET /v1/channels/{id}/members", s.chanAuth(s.channelMembers))
+	m.HandleFunc("PUT /v1/channels/{id}/settings", s.chanAuth(s.channelSettings))
+	m.HandleFunc("POST /v1/channels/{id}/leave", s.chanAuth(s.channelLeave))
+	m.HandleFunc("DELETE /v1/channels/{id}", s.chanAuth(s.channelDelete))
 	if s.cfg.WebDir != "" {
 		m.Handle("/", s.webHandler())
 	}
@@ -220,6 +235,8 @@ func tokenEq(hash []byte, token string) bool {
 
 var b64 = base64.StdEncoding
 
+func jsonUnmarshal(b []byte, v any) bool { return json.Unmarshal(b, v) == nil }
+
 func (s *Server) isLocal(domain string) bool { return strings.EqualFold(domain, s.cfg.Domain) }
 
 // ---- Öffentliche Basis-Endpunkte ----
@@ -291,6 +308,9 @@ func (s *Server) sweep() {
 	}
 	if err := s.st.PurgeMessages(s.cfg.MessageRetention); err != nil {
 		s.log.Error("purge", "err", err)
+	}
+	if err := s.st.PurgeChannelLog(s.cfg.ChannelRetention); err != nil {
+		s.log.Error("purge channels", "err", err)
 	}
 	s.nonces.sweep()
 	s.limiter.sweep()

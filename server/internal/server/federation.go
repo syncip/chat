@@ -256,3 +256,26 @@ func (s *Server) fedDeliver(w http.ResponseWriter, r *http.Request) {
 	}
 	s.deliverStatus(w, s.deliverLocal(fb.MailboxID, fb.SendToken, data, origin))
 }
+
+// fetchUserIK liefert den Konto-Schlüssel (AIK) eines Nutzers von dessen Heimatserver (zur Prüfung von Adress-Angaben).
+func (f *federation) fetchUserIK(ctx context.Context, domain, name string) ([]byte, error) {
+	if !f.allowed(domain) {
+		return nil, errors.New("not permitted")
+	}
+	req, _ := http.NewRequestWithContext(ctx, "GET", f.base(domain)+"/v1/users/"+name, nil)
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	var v struct {
+		IK string `json:"ik"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&v); err != nil {
+		return nil, err
+	}
+	return b64.DecodeString(v.IK)
+}

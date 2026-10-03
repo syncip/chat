@@ -72,7 +72,7 @@ class Api(val domain: String, private val signer: Signer? = null, val http: OkHt
 
     fun wsUrl(): String = base.replaceFirst("http", "ws") + "/v1/stream"
 
-    private suspend fun exec(url: String, build: Request.Builder.() -> Unit): Response {
+    internal suspend fun exec(url: String, build: Request.Builder.() -> Unit): Response {
         val req = Request.Builder().url(url).apply(build).build()
         try {
             return http.newCall(req).await()
@@ -82,7 +82,7 @@ class Api(val domain: String, private val signer: Signer? = null, val http: OkHt
         }
     }
 
-    private fun check(res: Response, ok: List<Int>): String {
+    internal fun check(res: Response, ok: List<Int>): String {
         res.use {
             val text = it.body?.string() ?: ""
             if (it.code !in ok) {
@@ -103,6 +103,16 @@ class Api(val domain: String, private val signer: Signer? = null, val http: OkHt
         val res = exec(base + uri) {
             header("Authorization", auth)
             val body: RequestBody? = if (json == null) (if (method == "GET" || method == "DELETE") null else ByteArray(0).toRequestBody(JSON)) else raw.toRequestBody(JSON)
+            method(method, body)
+        }
+        return check(res, ok)
+    }
+
+    /** Unsignierter/anders signierter JSON-Aufruf (z. B. Kanal-Endpunkte mit `Chan-Sig`). */
+    suspend fun rawJson(method: String, uri: String, headers: Map<String, String>, json: String?, ok: List<Int> = listOf(200, 201)): String {
+        val res = exec(base + uri) {
+            headers.forEach { (k, v) -> header(k, v) }
+            val body: RequestBody? = if (json == null) (if (method == "GET" || method == "DELETE") null else ByteArray(0).toRequestBody(JSON)) else json.toByteArray().toRequestBody(JSON)
             method(method, body)
         }
         return check(res, ok)

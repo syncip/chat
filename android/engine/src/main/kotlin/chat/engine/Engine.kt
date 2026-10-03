@@ -86,6 +86,14 @@ class Engine(
 
     private suspend fun <T> op(f: suspend () -> T): T = withContext(dispatcher) { f() }
 
+    private val channels = ChannelManager(http, scope, dispatcher, object : ChannelManager.Host {
+        override fun state() = state!!
+        override fun client() = client!!
+        override fun dirty() = this@Engine.dirty()
+        override suspend fun home(method: String, uri: String, json: String?) = api!!.call(method, uri, json)
+        override fun closed() = closed
+    })
+
     private fun emit() { _version.value = _version.value + 1 }
 
     fun close() {
@@ -202,6 +210,7 @@ class Engine(
             sync["sendDelivered"]?.jsonPrimitive?.boolean?.let { st.sendDelivered = it }
             sync["sendRead"]?.jsonPrimitive?.boolean?.let { st.sendRead = it }
             sync["onceDropOwnCopy"]?.jsonPrimitive?.boolean?.let { st.onceDropOwnCopy = it }
+            opt("channels", kotlinx.serialization.builtins.MapSerializer(kotlinx.serialization.serializer<String>(), ChannelState.serializer()))?.let { st.channels.putAll(it) }
             sync["intro"]?.takeIf { it !is kotlinx.serialization.json.JsonNull }?.let { st.intro = ChatJson.decodeFromJsonElement(IntroBox.serializer(), it) }
         }
         st.backupDone = true // das Backup existiert ja bereits
@@ -256,6 +265,10 @@ class Engine(
             put("filterMode", s.filterMode); put("serverSideFilter", s.serverSideFilter); put("directSend", s.directSend)
             put("sendDelivered", s.sendDelivered); put("sendRead", s.sendRead); put("onceDropOwnCopy", s.onceDropOwnCopy)
             s.intro?.let { put("intro", ChatJson.encodeToJsonElement(IntroBox.serializer(), it)) }
+            put("channels", ChatJson.encodeToJsonElement(
+                kotlinx.serialization.builtins.MapSerializer(kotlinx.serialization.serializer<String>(), ChannelState.serializer()),
+                s.channels.mapValues { (_, c) -> c.copy(posts = mutableListOf(), events = mutableListOf(), cursor = 0, unread = 0) },
+            ))
         }
         val json = buildJsonObject {
             put("v", 2); put("address", s.me.address); put("aik", client!!.exportIdentity().b64()); put("sync", sync)
@@ -264,6 +277,22 @@ class Engine(
     }
 
     /** Nach dem Speichern der Backup-Datei aufrufen (hebt die Pflicht nach der Registrierung auf). */
+    // ---------- Öffentliche Kanäle ----------
+
+    suspend fun createChannel(title: String, policy: ChannelPolicy): String = op { channels.create(title, policy) }
+    suspend fun previewChannel(link: String): ChannelPreview = op { channels.preview(link) }
+    suspend fun joinChannel(link: String, captchaToken: String? = null, captchaAnswer: String? = null): String = op { channels.join(link, captchaToken, captchaAnswer) }
+    suspend fun leaveChannel(id: String) = op { channels.leave(id) }
+    suspend fun deleteChannel(id: String) = op { channels.remove(id) }
+    suspend fun updateChannel(id: String, title: String?, policy: ChannelPolicy) = op { channels.update(id, title, policy) }
+    suspend fun syncChannel(id: String) = op { channels.sync(id) }
+    suspend fun postToChannel(id: String, parts: List<Part>) = op { channels.post(id, parts) }
+    suspend fun channelMod(id: String, action: String, target: String? = null, postId: String? = null, role: String? = null, seconds: Long? = null) =
+        op { channels.mod(id, action, target, postId, role, seconds) }
+    suspend fun channelMembers(id: String, status: String? = null): List<ChannelMember> = op { channels.members(id, status) }
+    suspend fun channelLink(id: String, host: String): String = op { "$host/${channels.link(id)}" }
+    suspend fun markChannelRead(id: String) = op { channels.markRead(id) }
+
     suspend fun markBackupDone() = op { state!!.backupDone = true; dirty() }
 
     private fun serialize(): ByteArray = buildJsonObject {
@@ -292,6 +321,7 @@ class Engine(
         flush()
         closed = true
         wsJob?.cancel(); tick?.cancel(); pump?.cancel()
+        channels.stop()
         ws?.cancel(); ws = null
         client?.destroy(); client = null
         vault?.destroy(); vault = null
@@ -328,6 +358,7 @@ class Engine(
         pump?.cancel()
         pump = scope.launch(dispatcher) { for (job in incoming) runCatching { job() }.onFailure { System.err.println("queue: $it") } }
         connect()
+        channels.start()
         tick = scope.launch(dispatcher) {
             while (true) { delay(30_000); purgeExpired(); retryOutbox() }
         }

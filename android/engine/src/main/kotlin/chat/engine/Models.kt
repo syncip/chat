@@ -186,6 +186,8 @@ data class AppState(
     var sendRead: Boolean = false,
     /** Einmal-Nachrichten: eigene Kopie sofort entfernen. */
     var onceDropOwnCopy: Boolean = false,
+    /** Öffentliche Kanäle (Schlüssel stehen auch in der Backup-Datei, damit neue Geräte sie bekommen). */
+    val channels: MutableMap<String, ChannelState> = mutableMapOf(),
 )
 
 @Serializable

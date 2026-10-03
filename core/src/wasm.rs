@@ -1,5 +1,5 @@
 //! WASM-Schnittstelle für den Web-Client. Alle Binärdaten als `Uint8Array`, strukturierte Daten als JSON.
-use crate::{error::Error, files, identity, message::Envelope, mls, vault};
+use crate::{envelope, error::Error, files, identity, message::Envelope, mls, vault};
 use wasm_bindgen::prelude::*;
 
 fn js(e: Error) -> JsError {
@@ -159,4 +159,44 @@ pub fn file_decrypt(key: &[u8], nonce: &[u8], data: &[u8]) -> Result<Vec<u8>, Js
 #[wasm_bindgen(js_name = encryptedSize)]
 pub fn encrypted_size(plain: usize) -> usize {
     files::encrypted_size(plain)
+}
+
+/// Entsperrter Vault (Argon2 nur einmal pro Sitzung).
+#[wasm_bindgen]
+pub struct Vault(vault::VaultSession);
+
+#[wasm_bindgen]
+impl Vault {
+    pub fn create(pass: &str) -> Result<Vault, JsError> {
+        vault::VaultSession::create(pass, vault::DEFAULT_KDF).map(Vault).map_err(js)
+    }
+    /// Gibt `[Vault, Uint8Array]` zurück.
+    pub fn open(pass: &str, blob: &[u8]) -> Result<js_sys::Array, JsError> {
+        let (v, pt) = vault::VaultSession::open(pass, blob).map_err(js)?;
+        Ok(js_sys::Array::of2(&JsValue::from(Vault(v)), &js_sys::Uint8Array::from(&pt[..])))
+    }
+    pub fn seal(&self, data: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.0.seal(data).map_err(js)
+    }
+}
+
+#[wasm_bindgen(js_name = envelopeKey)]
+pub fn envelope_key() -> Vec<u8> {
+    envelope::random_key().to_vec()
+}
+
+#[wasm_bindgen(js_name = envelopeSeal)]
+pub fn envelope_seal(key: &[u8], kind: u8, gid: &[u8], payload: &[u8]) -> Result<Vec<u8>, JsError> {
+    envelope::seal(key, kind, gid, payload).map_err(js)
+}
+
+/// Gibt `[kind:number, groupId:Uint8Array, payload:Uint8Array]` zurück.
+#[wasm_bindgen(js_name = envelopeOpen)]
+pub fn envelope_open(key: &[u8], blob: &[u8]) -> Result<js_sys::Array, JsError> {
+    let (k, g, p) = envelope::open(key, blob).map_err(js)?;
+    let a = js_sys::Array::new();
+    a.push(&JsValue::from(k));
+    a.push(&js_sys::Uint8Array::from(&g[..]));
+    a.push(&js_sys::Uint8Array::from(&p[..]));
+    Ok(a)
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path"
@@ -8,13 +9,18 @@ import (
 	"strings"
 )
 
-const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; " +
-	"font-src 'self'; connect-src 'self' https: wss: ws:; media-src blob:; worker-src 'self' blob:; manifest-src 'self'; " +
+const cspTmpl = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; " +
+	"font-src 'self'; connect-src 'self' https: wss:%s; media-src blob:; worker-src 'self' blob:; manifest-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // webHandler liefert das Web-Bundle (SPA) mit strikten Sicherheits-Headern aus.
 func (s *Server) webHandler() http.Handler {
 	root := s.cfg.WebDir
+	extra := ""
+	if x := strings.TrimSpace(s.cfg.CSPConnectExtra); x != "" && !strings.ContainsAny(x, ";\n\r") {
+		extra = " " + x
+	}
+	csp := fmt.Sprintf(cspTmpl, extra)
 	fsrv := http.FileServer(http.Dir(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

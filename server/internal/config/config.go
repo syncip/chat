@@ -30,14 +30,15 @@ type Config struct {
 	MessageRetention time.Duration
 
 	// Föderation: "open" (Default), "allowlist", "closed"
-	Federation     string
-	FedAllow       []string
-	FedBlock       []string
-	FedInsecure    bool // http statt https (nur Tests/lokal)
-	TrustProxyHdr  string
-	RatePerMinute  int
-	MaxMailboxes   int
-	MaxKeyPackages int
+	Federation      string
+	FedAllow        []string
+	FedBlock        []string
+	FedInsecure     bool // http statt https (nur Tests/lokal)
+	TrustProxyHdr   string
+	CSPConnectExtra string // zusätzliche connect-src-Quellen (z. B. http://localhost:* für lokale Tests)
+	RatePerMinute   int
+	MaxMailboxes    int
+	MaxKeyPackages  int
 }
 
 func Load() (*Config, error) {
@@ -63,6 +64,7 @@ func Load() (*Config, error) {
 		FedBlock:         envList("CHAT_FEDERATION_BLOCK"),
 		FedInsecure:      envBool("CHAT_FEDERATION_INSECURE_HTTP", false),
 		TrustProxyHdr:    env("CHAT_TRUST_PROXY_HEADER", ""),
+		CSPConnectExtra:  env("CHAT_CSP_CONNECT_EXTRA", ""),
 		RatePerMinute:    int(envInt("CHAT_RATE_PER_MINUTE", 120)),
 		MaxMailboxes:     int(envInt("CHAT_MAX_MAILBOXES", 5000)),
 		MaxKeyPackages:   int(envInt("CHAT_MAX_KEYPACKAGES", 200)),

@@ -21,6 +21,16 @@ pub enum Part {
     },
 }
 
+/// Postfach-Capability eines Mitglieds: Server, Postfach-ID, Einwurf-Token, Umschlag-Schlüssel (base64).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CapEntry {
+    pub address: String,
+    pub domain: String,
+    pub mailbox_id: String,
+    pub send_token: String,
+    pub key: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Content {
@@ -31,6 +41,10 @@ pub enum Content {
     Read { reference: String },
     /// Ablaufzeit in Sekunden für Folge-Nachrichten (0 = aus).
     Disappear { seconds: u64 },
+    /// „Hier erreichst du uns“: Empfangs-Postfächer (Capabilities) von Mitgliedern dieser Unterhaltung.
+    Directory { entries: Vec<CapEntry> },
+    /// Gruppenname.
+    GroupName { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,7 +57,7 @@ pub struct Envelope {
     pub content: Content,
 }
 
-pub const MAX_PARTS: usize = 64;
+pub const MAX_PARTS: usize = 256;
 
 impl Envelope {
     pub fn encode(&self) -> Result<Vec<u8>> {
@@ -56,6 +70,7 @@ impl Envelope {
         }
         let n = match &e.content {
             Content::Message { parts } | Content::Edit { parts, .. } => parts.len(),
+            Content::Directory { entries } => entries.len(),
             _ => 0,
         };
         if n > MAX_PARTS {

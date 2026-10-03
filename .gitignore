@@ -1,0 +1,8 @@
+target/
+node_modules/
+dist/
+*.db
+*.db-*
+/data/
+.env
+web/src/wasm/

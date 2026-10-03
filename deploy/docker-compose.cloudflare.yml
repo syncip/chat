@@ -1,0 +1,13 @@
+# OPTIONAL: Cloudflare Tunnel als Zusatz. Nicht Teil der App.
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.cloudflare.yml up -d
+# Cloudflare Dashboard: Public Hostname → Service  http://chat:8080
+# Hinweis: Cloudflare terminiert TLS und sieht Verkehrsmetadaten (siehe docs/THREAT_MODEL.md).
+# In .env setzen:  CF_TUNNEL_TOKEN=…   CHAT_TRUST_PROXY_HEADER=CF-Connecting-IP
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:?CF_TUNNEL_TOKEN setzen}
+    restart: unless-stopped
+    depends_on: [chat]

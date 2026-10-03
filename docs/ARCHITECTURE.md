@@ -19,7 +19,7 @@
 - **core/** (Rust): MLS, Schlüsselverwaltung, Datei-Verschlüsselung, Nachrichtenformat. Wiederverwendet von allen Clients.
 - **web/** (TypeScript, React, Vite): UI, PWA, lädt `core` als WASM.
 - **api/**: OpenAPI-Spezifikation.
-- **Dockerfile**, **docker-compose.yml**, **.env.example** im Repo-Root.
+- **Dockerfile**, **docker-compose.yml**, **.env.example** im Repo-Root; **deploy/**: optionale Tunnel-Beispiele (Cloudflare, Pangolin), nicht Teil der App.
 
 ## Tech-Entscheidungen
 
@@ -35,8 +35,9 @@
 ## Hosting
 
 - Ein Docker-Image, Konfiguration über Umgebungsvariablen (Limits siehe PROTOCOL.md §7).
-- Betrieb hinter **Pangolin** (empfohlen) oder **Cloudflare Tunnel**. Der Server spricht intern HTTP,
-  TLS terminiert der Tunnel. WebSocket-Unterstützung ist erforderlich.
+- Der Server spricht HTTP und ist **unabhängig von jedem Tunnel/Proxy**. Für öffentlichen Betrieb muss TLS davorstehen;
+  das kann ein beliebiger Reverse-Proxy oder ein **optionaler** Tunnel sein (Beispiele für Pangolin und Cloudflare in `deploy/`).
+  WebSocket-Unterstützung ist erforderlich.
 - Hinweis: Bei Cloudflare sieht Cloudflare Verkehrsmetadaten, siehe THREAT_MODEL.md.
 - Keine IP-/Access-Logs per Default.
 
@@ -55,5 +56,6 @@ chat/
 ├─ server/      (Go)
 ├─ web/         (TS/React)
 ├─ Dockerfile, docker-compose.yml
+├─ deploy/      (optionale Tunnel-Beispiele)
 └─ docs/
 ```

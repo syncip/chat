@@ -1,0 +1,14 @@
+# OPTIONAL: Pangolin (selbst gehosteter Tunnel). Nicht Teil der App.
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.pangolin.yml up -d
+# In Pangolin eine Ressource anlegen: Ziel http://chat:8080 (WebSocket wird benötigt).
+# In .env setzen:  PANGOLIN_ENDPOINT, NEWT_ID, NEWT_SECRET   und   CHAT_TRUST_PROXY_HEADER=X-Forwarded-For
+# Image/Variablen bitte mit der aktuellen Pangolin-Dokumentation abgleichen.
+services:
+  newt:
+    image: fosrl/newt:latest
+    environment:
+      PANGOLIN_ENDPOINT: ${PANGOLIN_ENDPOINT:?PANGOLIN_ENDPOINT setzen}
+      NEWT_ID: ${NEWT_ID:?NEWT_ID setzen}
+      NEWT_SECRET: ${NEWT_SECRET:?NEWT_SECRET setzen}
+    restart: unless-stopped
+    depends_on: [chat]

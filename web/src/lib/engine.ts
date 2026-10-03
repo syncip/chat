@@ -62,6 +62,7 @@ export class Engine {
   private closed = true;
   private lastSeq = 0;
   private backoff = 1000;
+  private relays: { convId: string; entry: CapEntry; sender: string }[] = [];
 
   subscribe = (l: Listener) => {
     this.listeners.add(l);
@@ -343,7 +344,10 @@ export class Engine {
   }
 
   private readMembers(gid: Uint8Array): { address: string; ik: string }[] {
-    return JSON.parse(this.client!.members(gid)) as { address: string; ik: string }[];
+    return (JSON.parse(this.client!.members(gid)) as { address: string; identity: string }[]).map((m) => ({
+      address: m.address,
+      ik: m.identity,
+    }));
   }
 
   private handleWelcome(welcome: Uint8Array): void {
@@ -393,6 +397,30 @@ export class Engine {
     // Zustand ist fortgeschrieben; blockierte Absender werden erst jetzt verworfen.
     if (this.isBlocked(res.sender)) return;
     this.applyContent(conv, res.sender, res.envelope);
+    await this.flushRelays();
+  }
+
+  /** Postfach-Verzeichnis in Gruppen vervollständigen: neue Einträge verteilen, dem Neuen die bekannten schicken. */
+  private async flushRelays(): Promise<void> {
+    const s = this.state!;
+    const list = this.relays;
+    this.relays = [];
+    for (const { convId, entry, sender } of list) {
+      const conv = s.conversations[convId];
+      if (!conv || conv.status !== 'active') continue;
+      const others = conv.members.map((m) => m.address).filter((a) => a !== s.me.address && a !== sender);
+      if (others.length) await this.sendContent(conv, { kind: 'directory', entries: [entry] }, others);
+      const known: CapEntry[] = Object.entries(conv.caps)
+        .filter(([a, k]) => a !== sender && !k.intro)
+        .map(([a, k]) => ({ address: a, domain: k.domain, mailbox_id: k.mailbox_id, send_token: k.send_token, key: k.key }));
+      if (known.length) await this.sendContent(conv, { kind: 'directory', entries: known }, [sender]);
+    }
+  }
+
+  private async sendContent(conv: Conversation, content: Content, only: string[]): Promise<void> {
+    const gid = unhex(conv.id);
+    const ct = this.client!.encryptEnvelope(gid, JSON.stringify(this.newEnvelope(content)));
+    await this.sendCt(conv, gid, KIND_MLS, ct, only);
   }
 
   private rebuildCaps(conv: Conversation) {
@@ -451,7 +479,15 @@ export class Engine {
         if (conv.kind === 'group') conv.title = c.name.slice(0, 80);
         break;
       case 'directory':
-        for (const e of c.entries) this.mergeCap(conv, sender, e);
+        for (const e of c.entries) {
+          const before = conv.caps[e.address]?.mailbox_id;
+          this.mergeCap(conv, sender, e);
+          const after = conv.caps[e.address]?.mailbox_id;
+          // Neue Selbst-Ankündigung: an die übrigen Mitglieder weiterreichen (sie kennen unser Postfach evtl. noch nicht).
+          if (e.address === sender && after && after !== before && conv.status === 'active' && conv.kind === 'group') {
+            this.relays.push({ convId: conv.id, entry: e, sender });
+          }
+        }
         break;
       case 'read':
         break;

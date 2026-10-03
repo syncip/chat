@@ -1,56 +1,10 @@
 // End-to-End-Test: zwei Server (föderiert) + zwei Browser. Benötigt: gebautes Web-Bundle, chatd-Binary, Playwright.
-// Aufruf: CHATD=/pfad/chatd WEB_DIR=../web/dist node e2e.mjs
-import { spawn } from 'node:child_process';
+// Aufruf: CHATD=/pfad/chatd WEB_DIR=../web/dist CHROME=/pfad/chrome node e2e.mjs
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
-
-const require = createRequire(import.meta.url);
-const { chromium } = require('playwright');
-const CHATD = process.env.CHATD ?? '../server/chatd';
-const WEB = process.env.WEB_DIR ?? '../web/dist';
-const EXE = process.env.CHROME ?? undefined;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function startServer(port) {
-  const dir = mkdtempSync(join(tmpdir(), 'chat-e2e-'));
-  const p = spawn(CHATD, [], {
-    env: {
-      ...process.env, CHAT_DOMAIN: `localhost:${port}`, CHAT_LISTEN: `127.0.0.1:${port}`, CHAT_DATA_DIR: dir, CHAT_WEB_DIR: WEB,
-      CHAT_ADMIN_KEY: 'e2e-admin-key', CHAT_FEDERATION_INSECURE_HTTP: 'true', CHAT_USER_INVITES: 'true', CHAT_RATE_PER_MINUTE: '100000', CHAT_CSP_CONNECT_EXTRA: 'http://localhost:*',
-    },
-    stdio: ['ignore', 'inherit', 'inherit'],
-  });
-  return p;
-}
-
-async function invite(port) {
-  const r = await fetch(`http://localhost:${port}/v1/admin/invites`, { method: 'POST', headers: { 'X-Admin-Key': 'e2e-admin-key' } });
-  assert.equal(r.status, 201);
-  return (await r.json()).invite;
-}
-
-async function waitUp(port) {
-  for (let i = 0; i < 50; i++) {
-    try { if ((await fetch(`http://localhost:${port}/v1/server-info`)).ok) return; } catch {}
-    await sleep(100);
-  }
-  throw new Error('server did not start');
-}
-
-async function register(page, port, name, pass) {
-  await page.goto(`http://localhost:${port}/`);
-  await page.getByLabel('Server').fill(`localhost:${port}`);
-  await page.getByLabel('Benutzername').fill(name);
-  await page.getByLabel('Einladungscode').fill(await invite(port));
-  await page.getByLabel(/^Passphrase \(/).fill(pass);
-  await page.getByLabel('Passphrase wiederholen').fill(pass);
-  await page.getByRole('button', { name: 'Konto erstellen' }).click();
-  await page.getByText('● verbunden').waitFor({ timeout: 30000 });
-}
+import { chromium, CHROME as EXE, sleep, startServer, waitUp, register } from './helpers.mjs';
 
 const servers = [startServer(18080), startServer(18081)];
 let browser;

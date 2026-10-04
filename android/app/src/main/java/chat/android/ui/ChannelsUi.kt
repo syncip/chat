@@ -222,6 +222,9 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
     var lang by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
+    var files by remember { mutableStateOf(listOf<android.net.Uri>()) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { files = files + it }
     val listState = rememberLazyListState()
     val isMod = ch.me.status == "active" && (ch.me.role == "owner" || ch.me.role == "mod")
 
@@ -243,8 +246,9 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
     fun send() {
         busy = true
         vm.run(onError = { vm.showError(it); busy = false }) {
-            vm.engine.postToChannel(ch.id, listOf(if (codeMode) Part.Code(lang, text) else Part.Text(text)))
-            text = ""; codeMode = false; busy = false
+            val atts = readAttachments(ctx, files, vm.engine.info?.limits?.max_file_size ?: Long.MAX_VALUE)
+            vm.engine.postToChannel(ch.id, if (codeMode) null else text, if (codeMode) lang to text else null, atts)
+            text = ""; files = emptyList(); codeMode = false; busy = false
         }
     }
 
@@ -270,8 +274,12 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
                 Text(blocker, Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 Row(Modifier.padding(8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { pick.launch("*/*") }) { Text("📎") }
                     TextButton(onClick = { codeMode = !codeMode }) { Text(if (codeMode) "</> ✓" else "</>") }
                     Column(Modifier.weight(1f)) {
+                        if (files.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            files.forEach { u -> androidx.compose.material3.FilterChip(selected = true, onClick = { files = files - u }, label = { Text(u.lastPathSegment ?: "Datei") }) }
+                        }
                         if (codeMode) OutlinedTextField(value = lang, onValueChange = { lang = it }, placeholder = { Text("Sprache") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(
                             value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().heightIn(max = 180.dp),
@@ -279,7 +287,7 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
                             textStyle = if (codeMode) MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace) else MaterialTheme.typography.bodyMedium,
                         )
                     }
-                    Button(enabled = !busy && text.isNotBlank(), onClick = { send() }) { Text(if (busy) "…" else "Senden") }
+                    Button(enabled = !busy && (text.isNotBlank() || files.isNotEmpty()), onClick = { send() }) { Text(if (busy) "…" else "Senden") }
                 }
             }
         }

@@ -38,6 +38,14 @@ class ChannelTest {
             eventually("Alice darf schreiben") { alice.chan(id).takeIf { it.me.can_write } }
             alice.engine.postToChannel(id, listOf(Part.Text("Danke")))
             eventually("Beitrag bei Bob") { bob.chan(id).takeIf { it.hasPost("Danke") } }
+
+            // Dateianhang in Kanal: Alice lädt hoch, Bob lädt entschlüsselt herunter
+            val bytes = ByteArray(70_000) { (it * 5).toByte() }
+            alice.engine.postToChannel(id, "mit Bild", files = listOf(Engine.Attachment("bild.png", "image/png", bytes)))
+            val got = eventually("Datei-Beitrag bei Bob") { bob.chan(id).posts.firstOrNull { p -> p.parts.any { it is Part.File } } }
+            val fp = got.parts.filterIsInstance<Part.File>().first()
+            assertEquals("bild.png", fp.name)
+            assertTrue(bob.engine.downloadFile(fp).contentEquals(bytes), "Kanaldatei bitgenau")
             val post = bob.chan(id).posts.first { it.parts.any { p -> p is Part.Text && p.body == "Danke" } }
             assertTrue(!post.bad && post.from == alice.address)
 

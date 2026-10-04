@@ -75,7 +75,9 @@ internal class AccountSync(private val h: Host) {
         } catch (e: Exception) { null }
     }
 
-    suspend fun run() {
+    /** Gleicht ab; liefert true, wenn Einträge anderer Geräte übernommen wurden (lokaler Zustand hat sich dadurch geändert). */
+    suspend fun run(): Boolean {
+        var appliedAny = false
         val s = h.state()
         val first = s.sync == null
         val st = s.sync ?: SyncState().also { s.sync = it }
@@ -107,6 +109,7 @@ internal class AccountSync(private val h: Host) {
                     apply(k, rem)
                     base[k] = SyncBase("", rem.ts, rem.del)
                     applied.add(k)
+                    appliedAny = true
                 }
             }
             if (applied.isNotEmpty()) {
@@ -114,17 +117,18 @@ internal class AccountSync(private val h: Host) {
                 for (k in applied) if (base[k]!!.del.not()) after[k]?.let { base[k] = SyncBase(it.toString(), base[k]!!.ts, false) }
             }
             merged.entries.removeAll { it.value.del && h.now() - it.value.ts > TOMBSTONE_MS }
-            if (!push) { st.version = version; return }
+            if (!push) { st.version = version; return appliedAny }
             val body = buildJsonObject { put("base_version", version); put("data", seal(SyncDoc(1, merged))) }.toString()
             try {
                 val out = ChatJson.parseToJsonElement(h.call("PUT", "/v1/sync", body)).jsonObject
                 st.version = out["version"]!!.jsonPrimitive.longOrNull ?: version
-                return
+                return appliedAny
             } catch (e: ApiException) {
                 if (e.status == 409) continue // jemand war schneller: neu abgleichen
                 throw e
             }
         }
+        return appliedAny
     }
 
     private fun apply(k: String, it: SyncItem) {

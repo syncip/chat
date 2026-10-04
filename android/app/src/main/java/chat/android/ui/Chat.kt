@@ -96,19 +96,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
                 vm.engine.editMessage(conv.id, ed.id, text)
                 editing = null
             } else {
-                val limit = vm.engine.info?.limits?.max_file_size ?: Long.MAX_VALUE
-                val atts = files.map { uri ->
-                    var name = "datei"; var size = -1L
-                    ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
-                        if (c.moveToFirst()) {
-                            c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = c.getString(it) }
-                            c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = c.getLong(it) }
-                        }
-                    }
-                    if (size > limit) throw IllegalStateException("$name: Datei zu groß (max. ${formatBytes(limit)}).")
-                    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("$name nicht lesbar.")
-                    Engine.Attachment(name, ctx.contentResolver.getType(uri) ?: "application/octet-stream", bytes)
-                }
+                val atts = readAttachments(ctx, files, vm.engine.info?.limits?.max_file_size ?: Long.MAX_VALUE)
                 vm.engine.sendMessage(
                     conv.id,
                     text = if (codeMode) null else text,
@@ -483,4 +471,18 @@ fun ConvInfoDialog(vm: AppViewModel, s: AppState, conv: Conversation, onClose: (
             }
         },
     )
+}
+
+/** Liest ausgewählte Dateien (Größenlimit vorab per Metadaten prüfen). */
+internal fun readAttachments(ctx: android.content.Context, uris: List<Uri>, limit: Long): List<Engine.Attachment> = uris.map { uri ->
+    var name = "datei"; var size = -1L
+    ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+        if (c.moveToFirst()) {
+            c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = c.getString(it) }
+            c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = c.getLong(it) }
+        }
+    }
+    if (size > limit) throw IllegalStateException("$name: Datei zu groß (max. ${formatBytes(limit)}).")
+    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("$name nicht lesbar.")
+    Engine.Attachment(name, ctx.contentResolver.getType(uri) ?: "application/octet-stream", bytes)
 }

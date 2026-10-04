@@ -78,7 +78,9 @@ export class AccountSync {
   }
 
   /** Lokale Änderungen erkennen, mit dem Server abgleichen, Fremdänderungen übernehmen. */
-  async run(): Promise<void> {
+  /** Liefert true, wenn Einträge anderer Geräte übernommen wurden (lokaler Stand hat sich dadurch geändert). */
+  async run(): Promise<boolean> {
+    let appliedAny = false;
     const s = this.h.state();
     const first = !s.sync;
     s.sync ??= { version: 0, base: {} };
@@ -112,6 +114,7 @@ export class AccountSync {
           this.apply(k, rem);
           base[k] = { h: '', ts: rem.ts, del: rem.del };
           applied.push(k);
+          appliedAny = true;
         }
       }
       if (applied.length) {
@@ -121,17 +124,18 @@ export class AccountSync {
       for (const [k, it] of Object.entries(merged)) if (it.del && Date.now() - it.ts > TOMBSTONE_MS) delete merged[k];
       if (!push) {
         s.sync.version = r.version;
-        return;
+        return appliedAny;
       }
       try {
         const out = await this.h.api().call<{ version: number }>('PUT', '/v1/sync', { base_version: r.version, data: this.seal({ v: 1, items: merged }) });
         s.sync.version = out.version;
-        return;
+        return appliedAny;
       } catch (e) {
         if (e instanceof ApiError && e.status === 409) continue; // jemand war schneller: neu abgleichen
         throw e;
       }
     }
+    return appliedAny;
   }
 
   /** Fremden Eintrag in den lokalen Zustand übernehmen. */

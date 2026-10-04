@@ -121,7 +121,10 @@ class Engine(
         if (state == null || api == null) return
         // Stand VOR dem Abgleich merken: Änderungen, die währenddessen passieren, müssen beim nächsten Durchlauf noch auffallen.
         val before = accountSync.signature()
-        try { accountSync.run(); lastSyncSig = before } catch (e: Exception) { System.err.println("sync: $e") }
+        try {
+            // Wurde etwas von einem anderen Gerät übernommen, ist `before` veraltet: einen weiteren Lauf erzwingen (der dann nichts mehr ändert).
+            lastSyncSig = if (accountSync.run()) "" else before
+        } catch (e: Exception) { System.err.println("sync: $e") }
     }
 
     private fun emit() { _version.value = _version.value + 1 }
@@ -1154,6 +1157,25 @@ class Engine(
         val conv = s.conversations[id]
         if (conv == null || conv.status != "active") throw ChatException("Unterhaltung nicht aktiv.")
         if (once && conv.kind != "dm") throw ChatException("Einmal-Nachrichten gibt es nur in privaten 1:1-Chats.")
+        val parts = buildParts(text, code, quote, files)
+        if (parts.isEmpty()) return@op
+        val env = newEnvelope(Content.Message(parts, if (once) true else null))
+        val msg = Msg(
+            id = env.id, from = s.me.address, ts = env.ts, parts = parts, status = "sending",
+            expiresAt = if (conv.disappearSeconds > 0) clock() + conv.disappearSeconds * 1000 else null,
+            once = if (once) true else null,
+        )
+        conv.messages.add(msg)
+        dirty()
+        val n = broadcast(conv, env)
+        // Ein Empfangsstatus kann bereits eingetroffen sein, während wir noch auf den Server warteten.
+        if (msg.status == "sending") msg.status = if (n > 0) "sent" else "failed"
+        if (once && s.onceDropOwnCopy) { msg.parts = emptyList(); msg.consumed = true }
+        dirty()
+    }
+
+    /** Baut die Teile einer Nachricht/eines Beitrags (Limits prüfen, Dateien verschlüsselt hochladen). */
+    private suspend fun buildParts(text: String?, code: Pair<String, String>?, quote: Msg?, files: List<Attachment>): MutableList<Part> {
         val lim = info?.limits
         val parts = mutableListOf<Part>()
         if (quote != null) parts.add(Part.Quote(quote.id, snippetOf(quote).take(200)))
@@ -1171,20 +1193,13 @@ class Engine(
             files.firstOrNull { it.data.size > lim.max_file_size }?.let { throw ChatException("${it.name}: Datei zu groß.") }
         }
         for (f in files) parts.add(uploadFile(f))
-        if (parts.isEmpty()) return@op
-        val env = newEnvelope(Content.Message(parts, if (once) true else null))
-        val msg = Msg(
-            id = env.id, from = s.me.address, ts = env.ts, parts = parts, status = "sending",
-            expiresAt = if (conv.disappearSeconds > 0) clock() + conv.disappearSeconds * 1000 else null,
-            once = if (once) true else null,
-        )
-        conv.messages.add(msg)
-        dirty()
-        val n = broadcast(conv, env)
-        // Ein Empfangsstatus kann bereits eingetroffen sein, während wir noch auf den Server warteten.
-        if (msg.status == "sending") msg.status = if (n > 0) "sent" else "failed"
-        if (once && s.onceDropOwnCopy) { msg.parts = emptyList(); msg.consumed = true }
-        dirty()
+        return parts
+    }
+
+    /** Beitrag mit Text/Code/Dateien in einen Kanal (Dateien liegen verschlüsselt auf dem eigenen Heimserver). */
+    suspend fun postToChannel(id: String, text: String?, code: Pair<String, String>? = null, files: List<Attachment> = emptyList()) = op {
+        val parts = buildParts(text, code, null, files)
+        if (parts.isNotEmpty()) channels.post(id, parts)
     }
 
     private suspend fun uploadFile(f: Attachment): Part.File {

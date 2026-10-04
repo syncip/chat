@@ -316,8 +316,8 @@ export class Engine {
     // Stand VOR dem Abgleich merken: Änderungen, die währenddessen passieren, müssen beim nächsten Durchlauf noch auffallen.
     const before = this.accountSync.signature();
     try {
-      await this.accountSync.run();
-      this.lastSyncSig = before;
+      // Wurde etwas von einem anderen Gerät übernommen, ist `before` veraltet: einen weiteren Lauf erzwingen (der dann nichts mehr ändert).
+      this.lastSyncSig = (await this.accountSync.run()) ? '' : before;
     } catch (e) {
       console.warn('sync', e);
     }

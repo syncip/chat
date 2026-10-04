@@ -315,3 +315,38 @@ func TestChatCodes(t *testing.T) {
 	req, _ = http.NewRequest("GET", n.ts.URL+"/v1/codes/martin-neu", nil)
 	mustJSON(t, do(t, req), 404, nil)
 }
+
+func TestChannelVisibilitySwitch(t *testing.T) {
+	n := newNode(t, nil)
+	owner, bob := n.mustUser("owner"), n.mustUser("bob")
+	pub := newChannel(owner, map[string]any{"join_mode": "open", "public": true})
+	var hk struct{ Path string }
+	owner.chanCall("POST", "/v1/channels/"+pub+"/hooks", map[string]any{"name": "H"}, 201, &hk)
+	setURL := "/v1/channels/" + pub + "/settings"
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	sealedTitle, err := server.SealEnvelope(key, 3, []byte("title"), []byte("Privat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv := map[string]any{"join_mode": "open", "public": false}
+	// ohne neuen Titel/Schlüssel abgelehnt
+	owner.chanCall("PUT", setURL, map[string]any{"policy": priv}, 400, nil)
+	owner.chanCall("PUT", setURL, map[string]any{"policy": priv, "title_enc": b64.EncodeToString(sealedTitle), "hook_key": "AAAA"}, 400, nil)
+	// nur der Besitzer
+	bob.chanCall("PUT", setURL, map[string]any{"policy": priv}, 403, nil)
+	owner.chanCall("PUT", setURL, map[string]any{"policy": priv, "title_enc": b64.EncodeToString(sealedTitle), "hook_key": b64.EncodeToString(key)}, 200, nil)
+	mustJSON(t, do(t, mustReq("GET", n.ts.URL+"/v1/channels/"+pub+"/public/log")), 404, nil) // nicht mehr öffentlich lesbar
+	// Webhook verschlüsselt nun mit dem neuen Schlüssel
+	req, _ := http.NewRequest("POST", n.ts.URL+hk.Path, strings.NewReader("hallo"))
+	mustJSON(t, do(t, req), 200, nil)
+	// zurück auf öffentlich (Klartexttitel)
+	owner.chanCall("PUT", setURL, map[string]any{"policy": map[string]any{"join_mode": "open", "public": true}, "title_enc": b64.EncodeToString([]byte("Öffentlich"))}, 200, nil)
+	var log struct{ Public bool }
+	mustJSON(t, do(t, mustReq("GET", n.ts.URL+"/v1/channels/"+pub+"/public/log")), 200, &log)
+	if !log.Public {
+		t.Fatal("wieder öffentlich erwartet")
+	}
+}

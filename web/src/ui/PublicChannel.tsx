@@ -68,7 +68,7 @@ export function PublicChannelView({ link, onClose }: { link: { s: string; c: str
       }
       let parts: Part[] = [];
       if (!e.deleted && e.data) {
-        try { parts = (JSON.parse(dec.decode(unb64(e.data))) as { parts: Part[] }).parts ?? []; } catch { parts = [{ type: 'text', body: '(Beitrag nicht lesbar)' }]; }
+        try { parts = (JSON.parse(dec.decode(unb64(e.data))) as { parts: Part[] }).parts ?? []; } catch { parts = [{ type: 'text', body: '🔒 (verschlüsselter Beitrag aus der privaten Zeit des Kanals)' }]; }
       }
       setPosts((ps) => [...ps, { id: e.post_id ?? String(e.seq), seq: e.seq, ts: e.ts, from: e.address, hook: e.hook, parts, deleted: !!e.deleted }]);
     };

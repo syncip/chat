@@ -93,13 +93,17 @@ data class ChEvent(val seq: Long, val ts: Long, val kind: String, val actor: Str
 data class ChannelState(
     val id: String,
     val server: String,
-    /** Kanalschlüssel (base64); nur im Link und lokal. */
-    val key: String,
+    /** Kanalschlüssel (base64); nur im Link und lokal. Leer bei öffentlichen Kanälen. */
+    var key: String,
     var title: String,
     /** Kanalbild (data-URL), Teil des verschlüsselten Titels. */
     var avatar: String? = null,
     var policy: ChannelPolicy,
     var me: ChannelMember,
+    /** Früherer Schlüssel (nach Wechsel auf „öffentlich“), um ältere verschlüsselte Beiträge weiter zu lesen. */
+    var prevKey: String? = null,
+    /** Kanal wurde auf „privat“ umgestellt und dieses Gerät kennt den neuen Schlüssel noch nicht. */
+    var needsKey: Boolean = false,
     val posts: MutableList<ChPost> = mutableListOf(),
     val events: MutableList<ChEvent> = mutableListOf(),
     var cursor: Long = 0,
@@ -210,6 +214,26 @@ internal class ChannelManager(
         if (o.kind == KIND_CHANNEL && o.groupId.contentEquals(gid)) o.payload else null
     } catch (e: Exception) { null }
 
+    /** Beitrag öffnen: aktueller Schlüssel, früherer Schlüssel, sonst Klartext (öffentliche Zeit des Kanals). */
+    private fun openAny(c: ChannelState, gid: ByteArray, data: ByteArray): ByteArray? {
+        for (k in listOfNotNull(c.key, c.prevKey)) {
+            if (k.isEmpty()) continue
+            open(k, gid, data)?.let { return it }
+        }
+        return if (runCatching { ChatJson.parseToJsonElement(String(data)) }.isSuccess) data else null
+    }
+
+    /** Kanal wurde auf „privat“ umgestellt: neuen Einladungslink einspielen (der Schlüssel steht darin). */
+    suspend fun rekey(id: String, linkText: String) {
+        val c = channels[id] ?: return
+        val l = decodeChannelLink(linkText)
+        if (l.c != id || l.k.isEmpty()) throw ChatException("Der Link gehört nicht zu diesem Kanal oder enthält keinen Schlüssel.")
+        c.key = l.k
+        c.needsKey = false
+        host.dirty()
+        sync(id)
+    }
+
     private fun title(key: String, enc64: String): String = meta(key, enc64).first
 
     /** Titel (und optional Kanalbild): Klartext oder `{"t":…,"i":"data:image/…"}`, bei privaten Kanälen mit dem Kanalschlüssel verschlüsselt. */
@@ -284,7 +308,17 @@ internal class ChannelManager(
 
     /** Kanal aus dem Konto-Sync übernehmen (dasselbe Konto ist serverseitig bereits Mitglied/Besitzer). */
     fun adopt(id: String, server: String, key: String, title: String, createdAt: Long) {
-        if (channels.containsKey(id)) return
+        channels[id]?.let { have ->
+            // Der Schlüssel kann sich durch Umstellen auf privat/öffentlich auf einem anderen Gerät geändert haben.
+            if (key != have.key) {
+                if (have.key.isNotEmpty() && key.isEmpty()) have.prevKey = have.key
+                have.key = key
+                have.needsKey = false
+                host.dirty()
+                scope.launch(dispatcher) { runCatching { sync(id) } }
+            }
+            return
+        }
         val c = ChannelState(id, server, key, title, null, ChannelPolicy(join_mode = "open", pow_bits = 0, isPublic = key.isEmpty()), ChannelMember(address = host.state().me.address), createdAt = createdAt)
         channels[id] = c
         host.dirty()
@@ -342,17 +376,31 @@ internal class ChannelManager(
         host.dirty()
     }
 
-    /** `avatar`: [KEEP_AVATAR] = unverändert, `""` = entfernen, sonst data-URL. */
-    suspend fun update(id: String, title: String?, policy: ChannelPolicy, avatar: String? = KEEP_AVATAR) {
+    /**
+     * `avatar`: [KEEP_AVATAR] = unverändert, `""` = entfernen, sonst data-URL. `makePublic`: Sichtbarkeit wechseln (null = unverändert).
+     * Beim Wechsel gibt es einen neuen Schlüssel (privat) bzw. keinen (öffentlich); der Titel wird neu versiegelt.
+     */
+    suspend fun update(id: String, title: String?, policy: ChannelPolicy, avatar: String? = KEEP_AVATAR, makePublic: Boolean? = null) {
         val c = channels[id]!!
         val newAvatar = if (avatar == KEEP_AVATAR) c.avatar else avatar?.takeIf { it.isNotEmpty() }
+        val wantPublic = makePublic ?: c.policy.isPublic
+        val switching = wantPublic != c.policy.isPublic
+        val newKey = if (switching && !wantPublic) uniffi.chat_core.envelopeKey().b64() else if (switching) "" else c.key
         val body = buildJsonObject {
-            put("policy", policyJson(policy))
-            if ((!title.isNullOrBlank() && title != c.title) || newAvatar != c.avatar) {
-                put("title_enc", seal(c.key, TITLE_GID, joinTitle(if (title.isNullOrBlank()) c.title else title, newAvatar).toByteArray()).b64())
+            put("policy", policyJson(if (switching) policy.copy(isPublic = wantPublic) else policy))
+            if (switching || (!title.isNullOrBlank() && title != c.title) || newAvatar != c.avatar) {
+                put("title_enc", seal(newKey, TITLE_GID, joinTitle(if (title.isNullOrBlank()) c.title else title, newAvatar).toByteArray()).b64())
             }
+            if (switching && !wantPublic) put("hook_key", newKey)
         }.toString()
         api(c).call("PUT", "/settings", body)
+        if (switching) {
+            if (wantPublic && c.key.isNotEmpty()) c.prevKey = c.key
+            c.key = newKey
+            c.needsKey = false
+            c.policy = c.policy.copy(isPublic = wantPublic)
+            host.dirty()
+        }
         sync(id)
     }
 
@@ -374,6 +422,7 @@ internal class ChannelManager(
 
     suspend fun post(id: String, parts: List<Part>) {
         val c = channels[id]!!
+        if (c.needsKey) throw ChatException("Dieser Kanal ist jetzt privat. Füge zuerst den neuen Einladungslink des Besitzers ein.")
         if (!c.me.can_write) throw ChatException("Du darfst in diesem Kanal nicht schreiben.")
         val postId = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes(12))
         val ts = System.currentTimeMillis()
@@ -408,7 +457,7 @@ internal class ChannelManager(
                 val epoch = e["epoch"]?.jsonPrimitive?.content ?: "0"
                 val msg = "CHAT-POST-V1\n${c.id}\n$pid\n$ts\n$epoch\n${sha256Bytes(data).hex()}"
                 val okSig = hook != null || uniffi.chat_core.ed25519Verify(ik.unb64(), msg.toByteArray(), e["sig"]!!.jsonPrimitive.content.unb64())
-                val pt = open(c.key, c.id.toByteArray(), data)
+                val pt = openAny(c, c.id.toByteArray(), data)
                 if (!okSig || pt == null) bad = true else {
                     try { parts = ChatJson.decodeFromString(PostPayload.serializer(), String(pt)).parts } catch (x: Exception) { bad = true }
                 }
@@ -441,7 +490,10 @@ internal class ChannelManager(
                 }
                 c.me = ChatJson.decodeFromJsonElement(ChannelMember.serializer(), r["me"]!!)
                 c.policy = policyOf(r["policy"]!!.jsonObject)
-                meta(c.key, r["title_enc"]!!.jsonPrimitive.content).let { c.title = it.first; c.avatar = it.second }
+                if (c.policy.isPublic && c.key.isNotEmpty()) { c.prevKey = c.key; c.key = "" } // auf „öffentlich“ umgestellt
+                c.needsKey = !c.policy.isPublic && c.key.isEmpty()
+                if (c.needsKey) { if (c.title.isEmpty()) c.title = "(Schlüssel fehlt)" }
+                else meta(c.key, r["title_enc"]!!.jsonPrimitive.content).let { c.title = it.first; c.avatar = it.second }
                 val entries = r["entries"]!!.jsonArray
                 for (e in entries) { ingest(c, e.jsonObject); c.cursor = e.jsonObject["seq"]!!.jsonPrimitive.content.toLong() }
                 while (c.posts.size > 1000) c.posts.removeAt(0)

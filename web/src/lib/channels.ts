@@ -226,6 +226,32 @@ export class ChannelManager {
     }
   }
 
+  /** Beitrag öffnen: aktueller Schlüssel, früherer Schlüssel, sonst Klartext (öffentliche Zeit des Kanals). */
+  private openAny(c: ChannelState, gid: Uint8Array, data: Uint8Array): Uint8Array | null {
+    for (const k of [c.key, c.prevKey]) {
+      if (!k) continue;
+      const r = this.open(k, gid, data);
+      if (r) return r;
+    }
+    try {
+      JSON.parse(dec.decode(data));
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Kanal wurde auf „privat“ umgestellt: neuen Einladungslink einspielen (der Schlüssel steht darin). */
+  async rekey(id: string, linkText: string): Promise<void> {
+    const c = this.channels[id];
+    const link = decodeChannelLink(linkText);
+    if (!c || link.c !== id || !link.k) throw new Error('Der Link gehört nicht zu diesem Kanal oder enthält keinen Schlüssel.');
+    c.key = link.k;
+    c.needsKey = false;
+    this.h.notify();
+    await this.sync(id);
+  }
+
   private title(key: string, enc64: string): string {
     return this.meta(key, enc64).title;
   }
@@ -328,7 +354,18 @@ export class ChannelManager {
 
   /** Kanal aus dem Konto-Sync übernehmen (dasselbe Konto ist serverseitig bereits Mitglied/Besitzer). */
   adopt(id: string, v: { server: string; key: string; title: string; createdAt: number }): void {
-    if (this.channels[id]) return;
+    const have = this.channels[id];
+    if (have) {
+      // Der Schlüssel kann sich durch Umstellen auf privat/öffentlich auf einem anderen Gerät geändert haben.
+      if (v.key !== have.key) {
+        if (have.key && !v.key) have.prevKey = have.key;
+        have.key = v.key;
+        have.needsKey = false;
+        this.h.notify();
+        void this.sync(id).catch(() => undefined);
+      }
+      return;
+    }
     const ch = this.blank(id, v.server, v.key, v.title, { join_mode: 'open', pow_bits: 0, probation_seconds: 0, members_can_write: false, slow_mode_seconds: 0, public: !v.key });
     ch.createdAt = v.createdAt;
     this.channels[id] = ch;
@@ -368,12 +405,29 @@ export class ChannelManager {
     this.h.notify();
   }
 
-  async update(id: string, opts: { title?: string; avatar?: string | null; policy: ChannelPolicy }): Promise<void> {
+  async update(id: string, opts: { title?: string; avatar?: string | null; policy: ChannelPolicy; public?: boolean }): Promise<void> {
     const c = this.channels[id];
     const body: Record<string, unknown> = { policy: opts.policy };
     const avatar = opts.avatar === undefined ? c.avatar : opts.avatar || undefined;
-    if ((opts.title && opts.title !== c.title) || avatar !== c.avatar) body.title_enc = b64(this.seal(c.key, TITLE_GID, enc.encode(joinTitle(opts.title || c.title, avatar))));
+    const wantPublic = opts.public ?? !!c.policy.public;
+    const switching = wantPublic !== !!c.policy.public;
+    // Beim Wechsel der Sichtbarkeit gibt es einen neuen Schlüssel (privat) bzw. keinen (öffentlich); der Titel wird neu versiegelt.
+    const newKey = switching && !wantPublic ? b64(this.h.core.envelopeKey()) : switching ? '' : c.key;
+    if (switching || (opts.title && opts.title !== c.title) || avatar !== c.avatar) {
+      body.title_enc = b64(this.seal(newKey, TITLE_GID, enc.encode(joinTitle(opts.title || c.title, avatar))));
+    }
+    if (switching) {
+      body.policy = { ...opts.policy, public: wantPublic };
+      if (!wantPublic) body.hook_key = newKey;
+    }
     await this.api(c).call('PUT', '/settings', body);
+    if (switching) {
+      if (wantPublic) c.prevKey = c.key || c.prevKey;
+      c.key = newKey;
+      c.needsKey = false;
+      c.policy = { ...c.policy, public: wantPublic };
+      this.h.notify();
+    }
     await this.sync(id);
   }
 
@@ -391,6 +445,7 @@ export class ChannelManager {
 
   async post(id: string, parts: Part[]): Promise<void> {
     const c = this.channels[id];
+    if (c.needsKey) throw new Error('Dieser Kanal ist jetzt privat. Füge zuerst den neuen Einladungslink des Besitzers ein.');
     if (!c.me.can_write) throw new Error('Du darfst in diesem Kanal nicht schreiben.');
     const postId = urlSafe(b64(randomBytes(12)));
     const ts = Date.now();
@@ -409,7 +464,7 @@ export class ChannelManager {
         const data = unb64(e.data);
         const msg = `CHAT-POST-V1\n${c.id}\n${e.post_id}\n${e.ts}\n${e.epoch ?? 0}\n${hex(await sha256(data))}`;
         const okSig = e.hook ? true : this.h.core.ed25519Verify(unb64(e.ik), enc.encode(msg), unb64(e.sig ?? ''));
-        const pt = this.open(c.key, enc.encode(c.id), data);
+        const pt = this.openAny(c, enc.encode(c.id), data);
         if (!okSig || !pt) {
           post.bad = true;
         } else {
@@ -468,7 +523,14 @@ export class ChannelManager {
         }
         c.me = r.me;
         c.policy = r.policy;
-        {
+        if (r.policy.public && c.key) { // auf „öffentlich“ umgestellt: neue Beiträge im Klartext, ältere weiter mit dem früheren Schlüssel
+          c.prevKey = c.key;
+          c.key = '';
+        }
+        c.needsKey = !r.policy.public && !c.key;
+        if (c.needsKey) {
+          c.title = c.title || '(Schlüssel fehlt)';
+        } else {
           const m = this.meta(c.key, r.title_enc);
           c.title = m.title;
           c.avatar = m.avatar;

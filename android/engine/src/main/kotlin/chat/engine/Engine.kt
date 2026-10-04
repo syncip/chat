@@ -396,7 +396,8 @@ class Engine(
     suspend fun joinChannel(link: String, captchaToken: String? = null, captchaAnswer: String? = null): String = op { channels.join(link, captchaToken, captchaAnswer) }
     suspend fun leaveChannel(id: String) = op { channels.leave(id) }
     suspend fun deleteChannel(id: String) = op { channels.remove(id) }
-    suspend fun updateChannel(id: String, title: String?, policy: ChannelPolicy, avatar: String? = KEEP_AVATAR) = op { channels.update(id, title, policy, avatar) }
+    suspend fun updateChannel(id: String, title: String?, policy: ChannelPolicy, avatar: String? = KEEP_AVATAR, makePublic: Boolean? = null) = op { channels.update(id, title, policy, avatar, makePublic) }
+    suspend fun rekeyChannel(id: String, link: String) = op { channels.rekey(id, link) }
     suspend fun syncChannel(id: String) = op { channels.sync(id) }
     suspend fun postToChannel(id: String, parts: List<Part>) = op { channels.post(id, parts) }
     suspend fun channelMod(id: String, action: String, target: String? = null, postId: String? = null, role: String? = null, seconds: Long? = null) =

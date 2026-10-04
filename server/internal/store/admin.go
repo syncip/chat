@@ -193,6 +193,12 @@ func (s *Store) CreateHook(h Hook, tokenHash []byte, maxPerChannel int) error {
 	return nil
 }
 
+// SetHooksKey setzt den Kanalschlüssel aller Webhooks des Kanals (nil bei öffentlichen Kanälen).
+func (s *Store) SetHooksKey(chID string, key []byte) error {
+	_, err := s.db.Exec(`UPDATE channel_hooks SET key=? WHERE channel_id=?`, key, chID)
+	return err
+}
+
 func (s *Store) ListHooks(chID string) ([]Hook, error) {
 	rows, err := s.db.Query(`SELECT id,name,created_at,last_used FROM channel_hooks WHERE channel_id=? ORDER BY created_at`, chID)
 	if err != nil {

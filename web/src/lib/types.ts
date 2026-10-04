@@ -182,6 +182,10 @@ export interface ChannelState {
   title: string;
   /** Kanalbild (data-URL), Teil des verschlüsselten Titels. */
   avatar?: string;
+  /** Früherer Schlüssel (nach Wechsel auf „öffentlich“), um ältere verschlüsselte Beiträge weiter zu lesen. */
+  prevKey?: string;
+  /** Der Kanal wurde auf „privat“ umgestellt und dieses Gerät kennt den neuen Schlüssel noch nicht (neuen Einladungslink einfügen). */
+  needsKey?: boolean;
   policy: ChannelPolicy;
   me: ChannelMember;
   posts: ChPost[];

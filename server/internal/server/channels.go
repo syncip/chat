@@ -699,6 +699,7 @@ func (s *Server) channelSettings(w http.ResponseWriter, r *http.Request, ch *sto
 	var in struct {
 		TitleEnc string       `json:"title_enc"`
 		Policy   chanPolicyIn `json:"policy"`
+		HookKey  string       `json:"hook_key"` // neuer Kanalschlüssel für Webhooks beim Wechsel auf „privat“
 	}
 	if !decodeJSON(w, body, &in) {
 		return
@@ -716,14 +717,36 @@ func (s *Server) channelSettings(w http.ResponseWriter, r *http.Request, ch *sto
 		}
 	}
 	p := in.Policy.policy()
-	p.Public = ch.Policy.Public // Öffentlich/Privat lässt sich nachträglich nicht ändern
 	if !p.Valid() {
 		writeErr(w, 400, "invalid policy")
 		return
 	}
+	var hookKey []byte
+	setHookKey := false
+	if p.Public != ch.Policy.Public {
+		// Sichtbarkeit wechseln: der Titel muss dazu neu versiegelt (privat) bzw. im Klartext (öffentlich) mitgeschickt werden.
+		if title == nil || len(title) == 0 {
+			writeErr(w, 400, "title required when changing visibility")
+			return
+		}
+		hooks, _ := s.st.ListHooks(ch.ID)
+		if p.Public {
+			setHookKey = true // öffentliche Kanäle haben unverschlüsselte Beiträge: Webhooks brauchen keinen Schlüssel
+		} else {
+			if k, g, _, err := openEnvelope(hookKeyOrNil(in.HookKey), title); err != nil || k != kindChannel || string(g) != "title" {
+				writeErr(w, 400, "hook_key must open the new title")
+				return
+			}
+			hookKey, _ = b64.DecodeString(in.HookKey)
+			setHookKey = len(hooks) > 0
+		}
+	}
 	if err := s.st.UpdateChannel(ch.ID, title, p); err != nil {
 		writeErr(w, 500, "internal error")
 		return
+	}
+	if setHookKey {
+		_ = s.st.SetHooksKey(ch.ID, hookKey)
 	}
 	seq, _ := s.st.AppendEvent(ch.ID, "settings", ik, nil, actor.Address, map[string]any{"join_mode": p.JoinMode, "members_can_write": p.MembersCanWrite})
 	s.chans.publish(ch.ID, seq)
@@ -918,4 +941,12 @@ func (s *Server) publicChannelEvents(w http.ResponseWriter, r *http.Request) {
 			fl.Flush()
 		}
 	}
+}
+
+func hookKeyOrNil(b64s string) []byte {
+	k, err := b64.DecodeString(b64s)
+	if err != nil || len(k) != 32 {
+		return make([]byte, 32) // schlägt beim Öffnen fehl
+	}
+	return k
 }

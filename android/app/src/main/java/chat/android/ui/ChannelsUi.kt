@@ -275,7 +275,16 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
                 items(ch.posts, key = { it.id }) { p -> PostRow(vm, ch, p, mine = p.from == s.me.address, isMod = isMod) }
             }
             HorizontalDivider()
-            if (blocker.isNotEmpty()) {
+            if (ch.needsKey) {
+                var newLink by remember { mutableStateOf("") }
+                var keyErr by remember { mutableStateOf("") }
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Dieser Kanal ist jetzt privat. Füge den neuen Einladungslink des Besitzers ein, um weiterzulesen.", color = MaterialTheme.colorScheme.error)
+                    OutlinedTextField(newLink, { newLink = it }, label = { Text("Neuer Einladungslink") }, modifier = Modifier.fillMaxWidth())
+                    if (keyErr.isNotEmpty()) Text(keyErr, color = MaterialTheme.colorScheme.error)
+                    Button(enabled = newLink.isNotBlank(), onClick = { vm.run(onError = { keyErr = it }) { vm.engine.rekeyChannel(ch.id, newLink); newLink = "" } }) { Text("Schlüssel übernehmen") }
+                }
+            } else if (blocker.isNotEmpty()) {
                 Text(blocker, Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 Row(Modifier.padding(8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -342,8 +351,9 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
     var linkText by remember { mutableStateOf("") }
     var publicLink by remember { mutableStateOf("") }
     var saved by remember { mutableStateOf(false) }
-    val dirty = isOwner && (title != ch.title || policy.copy(isPublic = false) != ch.policy.copy(isPublic = false))
-    LaunchedEffect(ch.id) {
+    var pub by remember { mutableStateOf(ch.policy.isPublic) }
+    val dirty = isOwner && (title != ch.title || pub != ch.policy.isPublic || policy.copy(isPublic = false) != ch.policy.copy(isPublic = false))
+    LaunchedEffect(ch.id, ch.key) {
         runCatching { linkText = vm.engine.channelLink(ch.id, baseUrl(ch.server)) }
         if (ch.policy.isPublic) runCatching { publicLink = vm.engine.channelPublicLink(ch.id, baseUrl(ch.server)) }
     }
@@ -358,10 +368,10 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
         onDismissRequest = onClose,
         // Speichern steht immer sichtbar unten (nicht im scrollbaren Bereich)
         confirmButton = {
-            if (dirty) Button(onClick = { run { vm.engine.updateChannel(ch.id, title, policy); saved = true } }) { Text("Speichern") }
+            if (dirty) Button(onClick = { run { vm.engine.updateChannel(ch.id, title, policy, makePublic = pub); saved = true } }) { Text("Speichern") }
             else TextButton(onClick = onClose) { Text("Schließen") }
         },
-        dismissButton = { if (dirty) TextButton(onClick = { title = ch.title; policy = ch.policy }) { Text("Verwerfen") } },
+        dismissButton = { if (dirty) TextButton(onClick = { title = ch.title; policy = ch.policy; pub = ch.policy.isPublic }) { Text("Verwerfen") } },
         title = { Text(ch.title) },
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -392,6 +402,20 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
                 if (isOwner) {
                     Text("Einstellungen (global)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
                     OutlinedTextField(value = title, onValueChange = { title = it.take(80) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Text("Sichtbarkeit", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = !pub, onClick = { pub = false; saved = false }, label = { Text("Privat (verschlüsselt)") })
+                        FilterChip(selected = pub, onClick = { pub = true; saved = false }, label = { Text("Öffentlich") })
+                    }
+                    if (pub != ch.policy.isPublic) {
+                        Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
+                            Text(
+                                if (pub) "🌐 Nach dem Speichern sind neue Beiträge für jeden im Internet lesbar. Ältere verschlüsselte Beiträge bleiben verschlüsselt."
+                                else "🔒 Nach dem Speichern gibt es einen neuen Schlüssel: Der öffentliche Link funktioniert nicht mehr, Mitglieder brauchen den neuen Einladungslink (siehe oben nach dem Speichern). Ältere öffentliche Beiträge bleiben auf dem Server im Klartext.",
+                                Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                     PolicyForm(policy) { policy = it; saved = false }
                 }
                 if (isMod) HooksSection(vm, ch)

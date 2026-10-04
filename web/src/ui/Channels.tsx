@@ -178,8 +178,10 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
     } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
   }
 
+  const [newLink, setNewLink] = useState('');
   let blocker = '';
-  if (ch.me.status === 'banned') blocker = 'Du wurdest aus diesem Kanal gesperrt.';
+  if (ch.needsKey) blocker = 'Dieser Kanal ist jetzt privat. Füge den neuen Einladungslink des Besitzers ein, um weiterzulesen.';
+  else if (ch.me.status === 'banned') blocker = 'Du wurdest aus diesem Kanal gesperrt.';
   else if (ch.me.status === 'pending') blocker = 'Dein Beitritt muss noch von der Moderation freigegeben werden.';
   else if (!ch.me.can_write) {
     if (ch.me.role === 'read') blocker = 'In diesem Kanal darfst du nur lesen.';
@@ -203,7 +205,16 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
         {ch.posts.map((p) => <PostView key={p.id} ch={ch} p={p} isMod={isMod} onErr={setErr} />)}
         <div ref={bottom} />
       </div>
-      {blocker ? <div className="banner">{blocker}</div> : (
+      {blocker && ch.needsKey && (
+        <div className="banner" role="alert">
+          {blocker}
+          <div className="row">
+            <input aria-label="Neuer Einladungslink" value={newLink} onChange={(x) => setNewLink(x.target.value)} placeholder="https://…/#/join/…" />
+            <button disabled={!newLink.trim()} onClick={async () => { setErr(''); try { await e.channels.rekey(ch.id, newLink); setNewLink(''); } catch (x) { setErr((x as Error).message); } }}>Schlüssel übernehmen</button>
+          </div>
+        </div>
+      )}
+      {blocker && !ch.needsKey ? <div className="banner">{blocker}</div> : blocker ? null : (
         <div className="composer">
           {files.length > 0 && (
             <div className="files">
@@ -264,7 +275,8 @@ function ChannelInfoDialog({ ch, onClose, onGone }: { ch: ChannelState; onClose:
   const [err, setErr] = useState('');
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
-  const dirty = title !== ch.title || JSON.stringify({ ...p, public: undefined }) !== JSON.stringify({ ...ch.policy, public: undefined });
+  const [pub, setPub] = useState(!!ch.policy.public);
+  const dirty = title !== ch.title || pub !== !!ch.policy.public || JSON.stringify({ ...p, public: undefined }) !== JSON.stringify({ ...ch.policy, public: undefined });
   const run = async (f: () => Promise<void>) => { setErr(''); try { await f(); if (isMod) setMembers(await e.channels.members(ch.id)); } catch (x) { setErr((x as Error).message); } };
   useEffect(() => { if (isMod) void e.channels.members(ch.id).then(setMembers).catch((x) => setErr((x as Error).message)); }, [ch.id, isMod, e]);
   const act = (m: ChannelMember, body: object) => run(() => e.channels.mod(ch.id, { target: m.ik, ...body } as never));
@@ -288,10 +300,23 @@ function ChannelInfoDialog({ ch, onClose, onGone }: { ch: ChannelState; onClose:
         <>
           <h3>Einstellungen (global)</h3>
           <label>Name<input value={title} onChange={(x) => { setTitle(x.target.value); setSaved(false); }} maxLength={80} /></label>
+          <label>Sichtbarkeit
+            <select aria-label="Sichtbarkeit" value={pub ? 'public' : 'private'} onChange={(x) => { setPub(x.target.value === 'public'); setSaved(false); }}>
+              <option value="private">Privat (Ende-zu-Ende-verschlüsselt, Zugang nur über den Einladungslink)</option>
+              <option value="public">Öffentlich (unverschlüsselt, ohne Konto lesbar)</option>
+            </select>
+          </label>
+          {pub !== !!ch.policy.public && (
+            <div className="banner bad" role="note">
+              {pub
+                ? '🌐 Nach dem Speichern sind neue Beiträge für jeden im Internet lesbar. Bereits verschlüsselte ältere Beiträge bleiben verschlüsselt.'
+                : '🔒 Nach dem Speichern gibt es einen neuen Schlüssel: Der öffentliche Link funktioniert nicht mehr, und Mitglieder brauchen den neuen Einladungslink (er erscheint hier nach dem Speichern). Ältere öffentliche Beiträge bleiben auf dem Server im Klartext und für Mitglieder lesbar.'}
+            </div>
+          )}
           <PolicyForm p={p} onChange={(v) => { setP(v); setSaved(false); }} />
           <div className="row savebar">
-            <button className="primary" disabled={!dirty} onClick={() => run(async () => { await e.channels.update(ch.id, { title, policy: p }); setSaved(true); })}>Speichern</button>
-            <button disabled={!dirty} onClick={() => { setTitle(ch.title); setP(ch.policy); }}>Zurücksetzen</button>
+            <button className="primary" disabled={!dirty} onClick={() => run(async () => { await e.channels.update(ch.id, { title, policy: p, public: pub }); setSaved(true); })}>Speichern</button>
+            <button disabled={!dirty} onClick={() => { setTitle(ch.title); setP(ch.policy); setPub(!!ch.policy.public); }}>Zurücksetzen</button>
             {dirty && <span className="warn">Ungespeicherte Änderungen</span>}
             {saved && !dirty && <span className="ok">✔ Gespeichert</span>}
           </div>

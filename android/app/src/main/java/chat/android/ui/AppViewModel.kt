@@ -94,7 +94,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            val m = e.message ?: "Fehler"
+            android.util.Log.e("chat", "Aktion fehlgeschlagen", e)
+            val m = e.message?.takeIf { it.isNotBlank() } ?: "Fehler: ${e.javaClass.simpleName}"
             if (onError != null) onError(m) else _error.value = m
         }
     }

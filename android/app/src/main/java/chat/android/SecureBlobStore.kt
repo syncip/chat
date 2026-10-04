@@ -6,6 +6,8 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import chat.engine.BlobStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.KeyStore
@@ -24,19 +26,35 @@ class SecureBlobStore(ctx: Context) : BlobStore {
 
     private fun file(name: String) = File(dir, name)
 
-    override suspend fun read(name: String): ByteArray? = withContext(Dispatchers.IO) {
-        val f = file(name)
-        if (!f.exists()) return@withContext null
-        val raw = f.readBytes()
+    /** Schreib- und Lesezugriffe nacheinander (eine Datei wird nie von zwei Vorgängen gleichzeitig geschrieben). */
+    private val lock = Mutex()
+
+    override suspend fun read(name: String): ByteArray? = lock.withLock {
+        withContext(Dispatchers.IO) {
+            val f = file(name)
+            if (!f.exists()) return@withContext null
+            try {
+                decrypt(name, f.readBytes())
+            } catch (e: Exception) {
+                // Letzte gute Fassung als Rückfall (falls die aktuelle Datei beschädigt ist).
+                val bak = File(dir, "$name.bak")
+                if (!bak.exists()) throw e
+                android.util.Log.w("chat", "$name nicht lesbar, nutze Sicherungskopie", e)
+                decrypt(name, bak.readBytes())
+            }
+        }
+    }
+
+    private fun decrypt(name: String, raw: ByteArray): ByteArray {
         val ivLen = raw[0].toInt() and 0xff
         val iv = raw.copyOfRange(1, 1 + ivLen)
         val c = Cipher.getInstance(TRANSFORM)
         c.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
         c.updateAAD(name.toByteArray())
-        c.doFinal(raw, 1 + ivLen, raw.size - 1 - ivLen)
+        return c.doFinal(raw, 1 + ivLen, raw.size - 1 - ivLen)
     }
 
-    override suspend fun write(name: String, data: ByteArray) {
+    override suspend fun write(name: String, data: ByteArray) = lock.withLock {
         withContext(Dispatchers.IO) {
             val c = Cipher.getInstance(TRANSFORM)
             c.init(Cipher.ENCRYPT_MODE, key()) // IV erzeugt der Keystore
@@ -48,12 +66,15 @@ class SecureBlobStore(ctx: Context) : BlobStore {
             ct.copyInto(out, 1 + c.iv.size)
             val tmp = File(dir, "$name.tmp")
             tmp.writeBytes(out)
-            if (!tmp.renameTo(file(name))) { file(name).writeBytes(out); tmp.delete() }
+            // Vorherige (lesbare) Fassung als Sicherungskopie behalten, dann atomar ersetzen.
+            val cur = file(name)
+            if (cur.exists()) runCatching { decrypt(name, cur.readBytes()) }.onSuccess { cur.copyTo(File(dir, "$name.bak"), overwrite = true) }
+            if (!tmp.renameTo(cur)) { cur.writeBytes(out); tmp.delete() }
         }
     }
 
-    override suspend fun delete(name: String) {
-        withContext(Dispatchers.IO) { file(name).delete() }
+    override suspend fun delete(name: String) = lock.withLock {
+        withContext(Dispatchers.IO) { file(name).delete(); File(dir, "$name.bak").delete(); Unit }
     }
 
     private fun key(): SecretKey {

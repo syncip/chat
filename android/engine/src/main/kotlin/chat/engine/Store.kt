@@ -15,7 +15,7 @@ class FileBlobStore(private val dir: File) : BlobStore {
     private fun f(name: String) = File(dir, name)
     override suspend fun read(name: String): ByteArray? = f(name).takeIf { it.exists() }?.readBytes()
     override suspend fun write(name: String, data: ByteArray) {
-        val tmp = File(dir, "$name.tmp")
+        val tmp = File(dir, "$name.${System.nanoTime()}.tmp")
         tmp.writeBytes(data)
         if (!tmp.renameTo(f(name))) { f(name).writeBytes(data); tmp.delete() } // atomar, wo möglich
     }

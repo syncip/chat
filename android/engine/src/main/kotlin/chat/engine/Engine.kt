@@ -320,7 +320,11 @@ class Engine(
     }
 
     suspend fun unlock(passphrase: String) = op {
-        val blob = store.read("vault") ?: throw ChatException("Kein Konto vorhanden.")
+        val blob = try {
+            store.read("vault")
+        } catch (e: Exception) {
+            throw ChatException("Die gespeicherten Daten auf diesem Gerät sind nicht lesbar (${e.javaClass.simpleName}). Bitte mit Backup-Datei oder QR-Code neu anmelden.")
+        } ?: throw ChatException("Kein Konto vorhanden.")
         openVault(passphrase, blob)
         start()
     }
@@ -433,10 +437,18 @@ class Engine(
         put("app", ChatJson.encodeToJsonElement(AppState.serializer(), state!!))
     }.toString().toByteArray()
 
+    /** Nur ein Schreibvorgang gleichzeitig: sonst können sich Hintergrund-Speichern und Sperren gegenseitig die Datei zerschießen. */
+    private val saveLock = kotlinx.coroutines.sync.Mutex()
+
     private suspend fun persist() {
-        val v = vault ?: return
-        if (client == null || state == null) return
-        store.write("vault", v.seal(serialize()))
+        saveLock.lock()
+        try {
+            val v = vault ?: return
+            if (client == null || state == null) return
+            store.write("vault", v.seal(serialize()))
+        } finally {
+            saveLock.unlock()
+        }
     }
 
     private fun dirty() {

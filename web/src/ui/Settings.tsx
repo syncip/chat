@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import type { DeviceInfo } from '../lib/types';
 import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
+import { minPassLength, setMinPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, idleLockMinutes, setIdleLockMinutes, type RememberMode } from '../lib/prefs';
+import { soundEnabled, setSoundEnabled, playNotify } from '../lib/sound';
+import { clearSession, persistentAvailable } from '../lib/session';
 import { Dialog } from './Dialog';
 
 export function Settings({ onClose }: { onClose: () => void }) {
@@ -15,6 +18,10 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const [newAllow, setNewAllow] = useState('');
   const [backupPass, setBackupPass] = useState('');
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [minLen, setMinLen] = useState(minPassLength());
+  const [remember, setRemember] = useState<RememberMode>(rememberMode());
+  const [idle, setIdle] = useState(idleLockMinutes());
+  const [sound, setSound] = useState(soundEnabled());
   const loadDevices = () => e.listDevices().then(setDevices).catch(() => undefined);
   const link = e.contactLink();
 
@@ -26,7 +33,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const lim = e.info?.limits;
 
   function download() {
-    if (backupPass.length < 10) return setMsg('Die Backup-Passphrase braucht mindestens 10 Zeichen.');
+    if (backupPass.length < minPassLength()) return setMsg(`Die Backup-Passphrase braucht mindestens ${minPassLength()} Zeichen.`);
     const data = e.exportBackup(backupPass);
     const url = URL.createObjectURL(new Blob([data as BlobPart], { type: 'application/octet-stream' }));
     const a = document.createElement('a');
@@ -39,6 +46,26 @@ export function Settings({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog title="Einstellungen" onClose={onClose} wide>
+      <section>
+        <h3>Anmeldung &amp; Sperre (nur hier)</h3>
+        <label>Angemeldet bleiben nach Neuladen
+          <select value={remember} onChange={(x) => { const m = x.target.value as RememberMode; setRemember(m); setRememberMode(m); if (m === 'off') void clearSession(); else setMsg('Gilt ab der nächsten Anmeldung.'); }}>
+            {(Object.keys(REMEMBER_LABEL) as RememberMode[]).filter((m) => persistentAvailable() || m === 'off' || m === 'tab').map((m) => <option key={m} value={m}>{REMEMBER_LABEL[m]}</option>)}
+          </select>
+          <span className="muted small">Dafür wird die Passphrase zeitlich begrenzt auf diesem Gerät vorgehalten (verschlüsselt mit einem nicht exportierbaren Browser-Schlüssel). Nur auf eigenen Geräten nutzen.{!persistentAvailable() ? ' Ohne TLS (https) ist nur „Tab“ möglich.' : ''}</span>
+        </label>
+        <label>Automatisch sperren nach Inaktivität (Minuten, 0 = nie)
+          <input type="number" min={0} value={idle} onChange={(x) => { const n = Math.max(0, Number(x.target.value) || 0); setIdle(n); setIdleLockMinutes(n); }} />
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={sound} onChange={(x) => { setSound(x.target.checked); setSoundEnabled(x.target.checked); if (x.target.checked) playNotify(); }} /> Benachrichtigungston bei neuen Nachrichten
+        </label>
+        <label>Mindestlänge für Passphrasen (Backup, neue Konten)
+          <input type="number" min={1} max={128} value={minLen} onChange={(x) => { const n = Math.min(128, Math.max(1, Number(x.target.value) || 1)); setMinLen(n); setMinPassLength(n); }} />
+          {minLen < 8 && <span className="warn">Sehr kurze Passphrasen sind leicht zu erraten.</span>}
+        </label>
+        <button onClick={() => { void clearSession(); void e.lock(); }}>Jetzt sperren</button>
+      </section>
       <section>
         <h3>Dein Kontaktlink</h3>
         {s.intro ? (

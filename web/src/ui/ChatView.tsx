@@ -163,6 +163,10 @@ function ConvInfo({ conv, onClose, onGone }: { conv: Conversation; onClose: () =
   const s = e.state!;
   const [add, setAdd] = useState('');
   const [err, setErr] = useState('');
+  const [name, setName] = useState(conv.title);
+  const [timer, setTimer] = useState(conv.disappearSeconds);
+  const [saved, setSaved] = useState(false);
+  const dirty = (conv.kind === 'group' && name.trim() !== conv.title) || timer !== conv.disappearSeconds;
   const others = memberAddresses(conv).filter((a) => a !== s.me.address).map((address) => ({ address }));
   const dmContacts = Object.values(s.conversations).filter((c) => c.kind === 'dm' && c.status === 'active')
     .map((c) => c.members.find((m) => m.address !== s.me.address)?.address).filter((a): a is string => !!a && !conv.members.some((m) => m.address === a));
@@ -198,10 +202,23 @@ function ConvInfo({ conv, onClose, onGone }: { conv: Conversation; onClose: () =
           <button disabled={!add} onClick={() => run(async () => { await e.addMember(conv.id, add); setAdd(''); })}>Hinzufügen</button>
         </div>
       )}
-      <h3>Verschwindende Nachrichten</h3>
-      <select value={conv.disappearSeconds} onChange={(x) => run(() => e.setDisappear(conv.id, Number(x.target.value)))}>
-        <option value={0}>Aus</option><option value={3600}>1 Stunde</option><option value={86400}>1 Tag</option><option value={604800}>1 Woche</option>
-      </select>
+      <h3>Einstellungen</h3>
+      {conv.kind === 'group' && <label>Gruppenname<input value={name} maxLength={80} onChange={(x) => { setName(x.target.value); setSaved(false); }} /></label>}
+      <label>Verschwindende Nachrichten
+        <select value={timer} onChange={(x) => { setTimer(Number(x.target.value)); setSaved(false); }}>
+          <option value={0}>Aus</option><option value={3600}>1 Stunde</option><option value={86400}>1 Tag</option><option value={604800}>1 Woche</option>
+        </select>
+      </label>
+      <div className="row">
+        <button className="primary" disabled={!dirty || (conv.kind === 'group' && !name.trim())} onClick={() => run(async () => {
+          if (conv.kind === 'group' && name.trim() !== conv.title) await e.renameGroup(conv.id, name);
+          if (timer !== conv.disappearSeconds) await e.setDisappear(conv.id, timer);
+          setSaved(true);
+        })}>Speichern</button>
+        <button disabled={!dirty} onClick={() => { setName(conv.title); setTimer(conv.disappearSeconds); }}>Zurücksetzen</button>
+        {dirty && <span className="warn">Ungespeicherte Änderungen</span>}
+        {saved && !dirty && <span className="ok">✔ Gespeichert</span>}
+      </div>
       <h3>Sicherheit</h3>
       <div className="row">
         <button onClick={() => run(() => e.rotateKeys(conv.id))}>Schlüssel erneuern</button>

@@ -161,6 +161,11 @@ impl Client {
         device::derive_inbox(&self.export_identity()?, device_id)
     }
 
+    /// Schlüssel des Konto-Sync-Blobs (siehe docs/SYNC.md).
+    pub fn sync_key(&self) -> Result<[u8; 32]> {
+        device::derive_sync_key(&self.export_identity()?)
+    }
+
     fn credential(&self) -> CredentialWithKey {
         let identity = device::encode_credential(
             &self.address,

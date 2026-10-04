@@ -45,6 +45,17 @@ try {
   // Titel wurde übertragen
   assert.ok(await bob.locator('.conv .title', { hasText: 'Projekt X' }).count() > 0, 'Gruppenname bei Bob');
 
+  // Umbenennen mit Speichern-Button
+  await alice.getByLabel('Details').click();
+  const rn = alice.getByRole('dialog');
+  await rn.getByLabel('Gruppenname').fill('Projekt Y');
+  await rn.getByText('Ungespeicherte Änderungen').waitFor();
+  await rn.getByRole('button', { name: 'Speichern' }).click();
+  await rn.getByText('Gespeichert').waitFor();
+  await alice.keyboard.press('Escape');
+  await bob.locator('.conv .title', { hasText: 'Projekt Y' }).waitFor({ timeout: 20000 });
+  console.log('✔ Gruppe umbenennen mit Speichern-Button');
+
   // Mitglied entfernen: danach erhält Carol nichts mehr
   await alice.getByLabel('Details').click();
   await alice.locator('li', { hasText: `carol@${H}:18090` }).getByRole('button', { name: 'Entfernen' }).click();

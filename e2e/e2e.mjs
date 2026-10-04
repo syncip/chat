@@ -96,7 +96,7 @@ try {
 
   // Persistenz: Alice sperren und entsperren (Verlauf bleibt)
   await alice.getByTitle('Einstellungen').click();
-  await alice.getByRole('button', { name: 'Sperren' }).click();
+  await alice.getByRole('button', { name: 'Sperren', exact: true }).click();
   await alice.getByLabel('Passphrase', { exact: true }).fill(pass);
   await alice.getByRole('button', { name: 'Entsperren' }).click();
   await alice.locator('.conv').first().click();

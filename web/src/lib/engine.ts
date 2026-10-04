@@ -4,6 +4,9 @@
  */
 import { Api, ApiError } from './api';
 import { ChannelManager } from './channels';
+import { AccountSync } from './sync';
+import { clearSession } from './session';
+import { playNotify } from './sound';
 import { loadCore, type Client, type Core, type Vault } from './core';
 import { kv } from './db';
 import type {
@@ -48,6 +51,8 @@ export class Engine {
   state: AppState | null = null;
   info: ServerInfo | null = null;
   online = false;
+  /** Dieses Konto ist Administrator des Servers (der erste registrierte Nutzer). */
+  isAdmin = false;
   version = 0;
   /** Adresse des lokal gespeicherten (ggf. gesperrten) Kontos. */
   knownAddress: string | null = null;
@@ -67,6 +72,9 @@ export class Engine {
   private receipts: { convId: string; kind: 'delivered' | 'read'; ids: string[] }[] = [];
   private reconciling = false;
   readonly channels: ChannelManager;
+  private accountSync: AccountSync;
+  private syncTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastSyncSig = '';
 
   constructor() {
     const self = this;
@@ -79,7 +87,18 @@ export class Engine {
       ik: () => self.client!.identityPublic(),
       address: () => self.state!.me.address,
       notify: () => self.dirty(),
+      incoming: () => playNotify(),
       homeCall: (m, u, b) => self.api!.call(m, u, b),
+    });
+    this.accountSync = new AccountSync({
+      get core() {
+        return self.core;
+      },
+      state: () => self.state!,
+      api: () => self.api!,
+      syncKey: () => self.client!.syncKey(),
+      applyChannel: (id, v) => (v ? self.channels.adopt(id, v) : self.channels.drop(id)),
+      notify: () => self.dirty(),
     });
   }
 
@@ -259,11 +278,32 @@ export class Engine {
   /** Zustand speichern (entprellt). */
   dirty() {
     this.emit();
+    this.scheduleSync();
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
       void this.persist();
     }, 250);
+  }
+
+  /** Änderungen an synchronisierten Daten (Kanäle, Einstellungen, Blocklisten, Kontakte) entprellt an die anderen Geräte weitergeben. */
+  private scheduleSync(): void {
+    if (this.syncTimer || !this.state || !this.api || this.closed) return;
+    this.syncTimer = setTimeout(() => {
+      this.syncTimer = null;
+      if (!this.state || this.accountSync.signature() === this.lastSyncSig) return;
+      this.enqueue(() => this.syncNow());
+    }, 1500);
+  }
+
+  private async syncNow(): Promise<void> {
+    if (!this.state || !this.api) return;
+    try {
+      await this.accountSync.run();
+    } catch (e) {
+      console.warn('sync', e);
+    }
+    if (this.state) this.lastSyncSig = this.accountSync.signature();
   }
 
   private async flush(): Promise<void> {
@@ -275,9 +315,12 @@ export class Engine {
   }
 
   async lock(): Promise<void> {
+    void clearSession(); // explizites Sperren (und Inaktivitäts-Sperre) beendet „Angemeldet bleiben“
     await this.flush();
     this.closed = true;
     this.channels.stop();
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    this.syncTimer = null;
     this.mediaCache.forEach((u) => void u.then((x) => URL.revokeObjectURL(x), () => undefined));
     this.mediaCache.clear();
     this.timers.forEach(clearInterval);
@@ -315,6 +358,7 @@ export class Engine {
       /* offline: später erneut */
     }
     this.emit();
+    this.api.call<{ admin: boolean }>('GET', '/v1/me').then((m) => { this.isAdmin = m.admin; this.emit(); }, () => undefined);
     this.connect();
     this.channels.start();
     this.timers.push(setInterval(() => this.purgeExpired(), 30_000));
@@ -337,8 +381,11 @@ export class Engine {
         this.emit();
         this.enqueue(() => this.catchUp());
         this.enqueue(() => this.reconcileDevices());
+        this.enqueue(() => this.syncNow());
         void this.retryOutbox();
         void this.replenishKeyPackages();
+      } else if (m.type === 'sync') {
+        this.enqueue(() => this.syncNow());
       } else if (m.type === 'devices') {
         this.enqueue(() => this.reconcileDevices());
       } else if (m.type === 'message' && m.seq && m.mailbox_id && m.data) {
@@ -597,6 +644,7 @@ export class Engine {
         conv.messages.sort((a, b) => a.ts - b.ts);
         if (!own) {
           conv.unread++;
+          if (conv.status === 'active') playNotify();
           if (conv.kind === 'dm' && s.sendDelivered) this.receipts.push({ convId: conv.id, kind: 'delivered', ids: [env.id] });
         }
         break;
@@ -1256,6 +1304,17 @@ export class Engine {
     this.dirty();
   }
 
+  /** Gruppe umbenennen (alle Mitglieder erhalten den neuen Namen). */
+  async renameGroup(id: string, name: string): Promise<void> {
+    const conv = this.state!.conversations[id];
+    if (!conv || conv.kind !== 'group' || conv.status !== 'active') throw new Error('Nur aktive Gruppen lassen sich umbenennen.');
+    const n = name.trim().slice(0, 80);
+    if (!n) throw new Error('Der Name darf nicht leer sein.');
+    conv.title = n;
+    await this.broadcast(conv, this.newEnvelope({ kind: 'group_name', name: n }));
+    this.dirty();
+  }
+
   async setDisappear(id: string, seconds: number): Promise<void> {
     const conv = this.state!.conversations[id];
     if (!conv) return;
@@ -1420,6 +1479,24 @@ export class Engine {
 
   async quota(): Promise<{ used: number; quota: number }> {
     return this.api!.call('GET', '/v1/quota');
+  }
+
+  // ---------- Administration (nur für Administratoren) ----------
+
+  adminStats() {
+    return this.api!.call<{ stats: Record<string, number>; uptime_seconds: number; requests_total: number; ws_connections: number; goroutines: number; memory_bytes: number; domain: string }>('GET', '/v1/admin/stats');
+  }
+  adminSettings() {
+    return this.api!.call<Record<string, unknown>>('GET', '/v1/admin/settings');
+  }
+  saveAdminSettings(st: Record<string, unknown>) {
+    return this.api!.call<Record<string, unknown>>('PUT', '/v1/admin/settings', st);
+  }
+  adminUsers() {
+    return this.api!.call<{ users: { name: string; admin: boolean; created_at: number; devices: number; blob_bytes: number; channels: number }[] }>('GET', '/v1/admin/users');
+  }
+  setAdmin(name: string, admin: boolean) {
+    return this.api!.call('PUT', `/v1/admin/users/${encodeURIComponent(name)}/admin`, { admin });
   }
 
   async createInvite(): Promise<string> {

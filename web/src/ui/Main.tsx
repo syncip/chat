@@ -11,9 +11,11 @@ import { Avatar } from './Avatar';
 import { FilesDialog } from './Files';
 import { SecurityDialog } from './Security';
 import { securityReport } from '../lib/security';
+import { AdminDialog } from './Admin';
+import { idleLockMinutes } from '../lib/prefs';
 import { ChannelView, CreateChannel, JoinChannel } from './Channels';
 
-type Panel = null | 'settings' | 'new' | 'group' | 'channel' | 'join' | 'files' | 'security';
+type Panel = null | 'admin' | 'settings' | 'new' | 'group' | 'channel' | 'join' | 'files' | 'security';
 
 export function Main() {
   const e = useEngine();
@@ -22,6 +24,18 @@ export function Main() {
   const [panel, setPanel] = useState<Panel>(null);
   const [toast, setToast] = useState('');
   const [, force] = useState(0);
+  // Automatische Sperre nach Inaktivität (Einstellung dieses Geräts)
+  useEffect(() => {
+    let last = Date.now();
+    const bump = () => { last = Date.now(); };
+    const evs = ['mousemove', 'keydown', 'pointerdown', 'touchstart', 'scroll'] as const;
+    evs.forEach((n) => window.addEventListener(n, bump, { passive: true }));
+    const t = setInterval(() => {
+      const m = idleLockMinutes();
+      if (m > 0 && Date.now() - last > m * 60_000) void e.lock();
+    }, 10_000);
+    return () => { evs.forEach((n) => window.removeEventListener(n, bump)); clearInterval(t); };
+  }, [e]);
   const [httpDismissed, setHttpDismissed] = useState(() => { try { return sessionStorage.getItem('httpWarn') === '1'; } catch { return false; } });
   const [pending, setPending] = useState<string | null>(null);
   const [activeChan, setActiveChan] = useState<string | null>(null);
@@ -52,6 +66,8 @@ export function Main() {
   const chans = Object.values(s.channels ?? {}).sort((a, b) => (b.posts.at(-1)?.ts ?? b.createdAt) - (a.posts.at(-1)?.ts ?? a.createdAt));
   const sec = securityReport(e);
   const alerts = s.alerts ?? [];
+  const unreadTotal = Object.values(s.conversations).reduce((n, c) => n + c.unread, 0) + Object.values(s.channels ?? {}).reduce((n, c) => n + c.unread, 0);
+  useEffect(() => { document.title = unreadTotal > 0 ? `(${unreadTotal}) Chat` : 'Chat'; }, [unreadTotal]);
   const currentChan = activeChan ? s.channels?.[activeChan] : undefined;
 
   return (
@@ -83,6 +99,7 @@ export function Main() {
             <button title="Kanal erstellen" onClick={() => setPanel('channel')}>📢</button>
             <button title="Kanal beitreten" onClick={() => setPanel('join')}>🔗</button>
             <button title="Alle Dateien" aria-label="Alle Dateien" onClick={() => setPanel('files')}>📁</button>
+            {e.isAdmin && <button title="Server-Administration" aria-label="Administration" onClick={() => setPanel('admin')}>🛠</button>}
             <button title="Sicherheit" aria-label="Sicherheit" className={`sec-chip ${sec.level}`} onClick={() => setPanel('security')}>🛡</button>
             <button title="Einstellungen" onClick={() => setPanel('settings')}>⚙</button>
           </div>
@@ -135,6 +152,7 @@ export function Main() {
       </main>
     </div>
       {!s.backupDone && <BackupGate />}
+      {panel === 'admin' && <AdminDialog onClose={() => setPanel(null)} />}
       {panel === 'files' && <FilesDialog onClose={() => setPanel(null)} />}
       {panel === 'security' && <SecurityDialog onClose={() => setPanel(null)} />}
       {panel === 'settings' && <Settings onClose={() => setPanel(null)} />}

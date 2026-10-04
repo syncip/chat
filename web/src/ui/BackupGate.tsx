@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useEngine } from './hooks';
+import { minPassLength } from '../lib/prefs';
 
 /** Pflicht nach der Registrierung: Backup-Datei speichern (sie ist die Anmeldung auf weiteren Geräten und die Wiederherstellung). */
 export function BackupGate() {
@@ -11,7 +12,7 @@ export function BackupGate() {
 
   function save() {
     setErr('');
-    if (p1.length < 10) return setErr('Die Backup-Passphrase braucht mindestens 10 Zeichen.');
+    if (p1.length < minPassLength()) return setErr(`Die Backup-Passphrase braucht mindestens ${minPassLength()} Zeichen.`);
     if (p1 !== p2) return setErr('Die Passphrasen stimmen nicht überein.');
     const data = e.exportBackup(p1);
     const url = URL.createObjectURL(new Blob([data as BlobPart], { type: 'application/octet-stream' }));
@@ -31,7 +32,7 @@ export function BackupGate() {
           Die Backup-Datei enthält deinen Konto-Schlüssel. Du brauchst sie, um dich auf <strong>weiteren Geräten anzumelden</strong> oder
           dein Konto nach einem Geräteverlust wiederherzustellen. Ohne sie ist ein verlorenes Gerät auch ein verlorenes Konto.
         </p>
-        <label>Backup-Passphrase (mindestens 10 Zeichen)<input type="password" value={p1} onChange={(x) => setP1(x.target.value)} autoComplete="new-password" /></label>
+        <label>Backup-Passphrase (mindestens {minPassLength()} Zeichen)<input type="password" value={p1} onChange={(x) => setP1(x.target.value)} autoComplete="new-password" /></label>
         <label>Wiederholen<input type="password" value={p2} onChange={(x) => setP2(x.target.value)} autoComplete="new-password" /></label>
         <p className="warn">Bewahre Datei und Passphrase getrennt und sicher auf. Wer beides hat, kann sich als du anmelden.</p>
         {err && <p className="error" role="alert">{err}</p>}

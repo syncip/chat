@@ -31,7 +31,7 @@ export function decodeChannelLink(text: string): ChannelLink {
   const m = /#\/join\/([A-Za-z0-9_-]+)/.exec(text) ?? /^([A-Za-z0-9_-]+)$/.exec(text.trim());
   if (!m) throw new Error('Ungültiger Kanal-Link');
   const j = JSON.parse(dec.decode(unb64(unUrlSafe(m[1])))) as ChannelLink;
-  if (!j.s || !j.c || !j.k) throw new Error('Ungültiger Kanal-Link');
+  if (!j.s || !j.c || typeof j.k !== 'string') throw new Error('Ungültiger Kanal-Link');
   return j;
 }
 
@@ -66,6 +66,7 @@ interface RawEntry {
   deleted?: boolean;
   data?: string;
   sig?: string;
+  hook?: string;
   kind?: string;
   target?: string;
   meta?: string;
@@ -167,6 +168,8 @@ export interface Host {
   ik(): Uint8Array;
   address(): string;
   notify(): void;
+  /** Neuer Beitrag eines anderen (für den Benachrichtigungston). */
+  incoming(): void;
   /** Heimatserver-Domain und Name des Kontos (zum Anlegen von Kanälen). */
   homeCall<T>(method: string, uri: string, body?: unknown): Promise<T>;
 }
@@ -190,10 +193,12 @@ export class ChannelManager {
   }
 
   private seal(key: string, gid: Uint8Array, payload: Uint8Array): Uint8Array {
+    if (!key) return payload; // öffentlicher Kanal: unverschlüsselt
     return this.h.core.envelopeSeal(unb64(key), KIND_CHANNEL, gid, new Uint8Array(), payload);
   }
 
   private open(key: string, gid: Uint8Array, blob: Uint8Array): Uint8Array | null {
+    if (!key) return blob;
     try {
       const r = this.h.core.envelopeOpen(unb64(key), blob) as [number, Uint8Array, Uint8Array, Uint8Array];
       if (r[0] !== KIND_CHANNEL || b64(r[1]) !== b64(gid)) return null;
@@ -204,6 +209,7 @@ export class ChannelManager {
   }
 
   private title(key: string, enc64: string): string {
+    if (!key) return dec.decode(unb64(enc64));
     const p = this.open(key, TITLE_GID, unb64(enc64));
     return p ? dec.decode(p) : '(unbekannt)';
   }
@@ -213,10 +219,35 @@ export class ChannelManager {
     return `${location.origin}/#/join/${encodeChannelLink({ s: c.server, c: c.id, k: c.key })}`;
   }
 
+  /** Öffentlicher Lese-Link (ohne Konto) – nur für öffentliche Kanäle. */
+  publicLink(id: string): string {
+    const c = this.channels[id];
+    return `${location.origin}/#/c/${urlSafe(b64(enc.encode(JSON.stringify({ s: c.server, c: c.id }))))}`;
+  }
+
+  // ---------- Webhooks (ntfy-kompatibel) ----------
+
+  async hooks(id: string): Promise<{ id: string; name: string; created_at: number; last_used: number }[]> {
+    return (await this.api(this.channels[id]).call<{ hooks: { id: string; name: string; created_at: number; last_used: number }[] }>('GET', '/hooks')).hooks;
+  }
+
+  /** Legt einen Webhook an. Bei nicht-öffentlichen Kanälen erhält der Server den Kanalschlüssel (er muss Webhook-Beiträge selbst verschlüsseln). */
+  async createHook(id: string, name: string): Promise<{ id: string; name: string; url: string }> {
+    const c = this.channels[id];
+    const r = await this.api(c).call<{ id: string; name: string; token: string }>('POST', '/hooks', { name, ...(c.key ? { key: c.key } : {}) });
+    return { id: r.id, name: r.name, url: `${baseUrl(c.server)}/h/${r.token}` };
+  }
+
+  async deleteHook(id: string, hookId: string): Promise<void> {
+    await this.api(this.channels[id]).call('DELETE', `/hooks/${hookId}`);
+    await this.sync(id);
+  }
+
   // ---------- Verwaltung ----------
 
-  async create(title: string, policy: ChannelPolicy): Promise<string> {
-    const key = b64(this.h.core.envelopeKey());
+  async create(title: string, policy0: ChannelPolicy, isPublic = false): Promise<string> {
+    const policy: ChannelPolicy = { ...policy0, public: isPublic };
+    const key = isPublic ? '' : b64(this.h.core.envelopeKey());
     const titleEnc = b64(this.seal(key, TITLE_GID, enc.encode(title.trim() || 'Kanal')));
     const r = await this.h.homeCall<{ id: string }>('POST', '/v1/channels', { title_enc: titleEnc, policy });
     const server = this.h.state().me.domain;
@@ -266,6 +297,25 @@ export class ChannelManager {
     await this.sync(link.c);
     this.watch(link.c);
     return link.c;
+  }
+
+  /** Kanal aus dem Konto-Sync übernehmen (dasselbe Konto ist serverseitig bereits Mitglied/Besitzer). */
+  adopt(id: string, v: { server: string; key: string; title: string; createdAt: number }): void {
+    if (this.channels[id]) return;
+    const ch = this.blank(id, v.server, v.key, v.title, { join_mode: 'open', pow_bits: 0, probation_seconds: 0, members_can_write: false, slow_mode_seconds: 0, public: !v.key });
+    ch.createdAt = v.createdAt;
+    this.channels[id] = ch;
+    this.h.notify();
+    void this.sync(id).catch(() => undefined);
+    this.watch(id);
+  }
+
+  /** Kanal lokal entfernen (Löschung auf einem anderen Gerät). */
+  drop(id: string): void {
+    if (!this.channels[id]) return;
+    this.unwatch(id);
+    delete this.channels[id];
+    this.h.notify();
   }
 
   async leave(id: string): Promise<void> {
@@ -326,11 +376,11 @@ export class ChannelManager {
   private async ingest(c: ChannelState, e: RawEntry): Promise<void> {
     if (e.type === 'post') {
       if (c.posts.some((p) => p.id === e.post_id)) return;
-      const post: ChPost = { id: e.post_id!, seq: e.seq, ts: e.ts, from: e.address, ik: e.ik, parts: [], deleted: !!e.deleted };
-      if (!e.deleted && e.data && e.sig) {
+      const post: ChPost = { id: e.post_id!, seq: e.seq, ts: e.ts, from: e.address, ik: e.ik, parts: [], deleted: !!e.deleted, hook: e.hook };
+      if (!e.deleted && e.data && (e.sig || e.hook)) {
         const data = unb64(e.data);
         const msg = `CHAT-POST-V1\n${c.id}\n${e.post_id}\n${e.ts}\n${e.epoch ?? 0}\n${hex(await sha256(data))}`;
-        const okSig = this.h.core.ed25519Verify(unb64(e.ik), enc.encode(msg), unb64(e.sig));
+        const okSig = e.hook ? true : this.h.core.ed25519Verify(unb64(e.ik), enc.encode(msg), unb64(e.sig ?? ''));
         const pt = this.open(c.key, enc.encode(c.id), data);
         if (!okSig || !pt) {
           post.bad = true;
@@ -343,7 +393,10 @@ export class ChannelManager {
         }
       }
       c.posts.push(post);
-      if (e.address !== this.h.address()) c.unread++;
+      if (e.address !== this.h.address()) {
+        c.unread++;
+        if (c.cursor > 0 || c.posts.length > 0) this.h.incoming(); // nicht beim ersten Laden des Verlaufs
+      }
     } else {
       let meta: Record<string, unknown> = {};
       try {

@@ -121,6 +121,8 @@ export interface AppState {
   /** Bekannte Geräte des Kontos (zur Erkennung neu hinzugefügter Geräte) und offene Sicherheitshinweise. */
   knownDevices?: string[];
   alerts?: SecurityAlert[];
+  /** Konto-Sync: zuletzt abgeglichene Version und lokale Änderungsstände je Eintrag. */
+  sync?: { version: number; base: Record<string, { h: string; ts: number; del: boolean }> };
 }
 
 export interface ChannelPolicy {
@@ -129,6 +131,8 @@ export interface ChannelPolicy {
   probation_seconds: number;
   members_can_write: boolean;
   slow_mode_seconds: number;
+  /** Öffentlicher Kanal: unverschlüsselt, ohne Konto lesbar (nur bei Erstellung wählbar). */
+  public?: boolean;
 }
 
 export interface ChannelMember {
@@ -149,6 +153,8 @@ export interface ChPost {
   ik: string;
   parts: Part[];
   deleted?: boolean;
+  /** Über einen Webhook eingegangen (vom Server verfasst, nicht von einem Mitglied signiert). */
+  hook?: string;
   /** Signatur oder Entschlüsselung fehlgeschlagen. */
   bad?: boolean;
 }

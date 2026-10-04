@@ -64,6 +64,11 @@ impl Client {
                 .to_string(),
         )
     }
+    /// Schlüssel (32 Byte) für den Konto-Sync-Blob.
+    #[wasm_bindgen(js_name = syncKey)]
+    pub fn sync_key(&self) -> Result<Vec<u8>, JsError> {
+        Ok(self.0.sync_key().map_err(js)?.to_vec())
+    }
     #[wasm_bindgen(js_name = identityPublic)]
     pub fn identity_public(&self) -> Vec<u8> {
         self.0.identity_public()

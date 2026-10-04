@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import { isInsecureTransport } from '../lib/util';
 import { useEngine } from './hooks';
+import { minPassLength, setMinPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, type RememberMode } from '../lib/prefs';
+import { saveSession, persistentAvailable } from '../lib/session';
 
 function TransportNote() {
   return isInsecureTransport() ? (
@@ -20,11 +22,12 @@ export function Onboarding() {
   const file = useRef<HTMLInputElement>(null);
   const [restore, setRestore] = useState(false);
   const [bpass, setBpass] = useState('');
+  const [minLen, setMinLen] = useState(minPassLength());
 
   async function submit(ev: React.FormEvent) {
     ev.preventDefault();
     setErr('');
-    if (pass.length < 10) return setErr('Die Passphrase braucht mindestens 10 Zeichen.');
+    if (pass.length < minLen) return setErr(`Die Passphrase braucht mindestens ${minLen} Zeichen.`);
     if (pass !== pass2) return setErr('Die Passphrasen stimmen nicht überein.');
     setBusy(true);
     try {
@@ -67,6 +70,10 @@ export function Onboarding() {
           <input type="password" value={pass} onChange={(x) => setPass(x.target.value)} autoComplete="new-password" required />
         </label>
         <label>Passphrase wiederholen<input type="password" value={pass2} onChange={(x) => setPass2(x.target.value)} autoComplete="new-password" required /></label>
+        <label>Mindestlänge der Passphrase (auf diesem Gerät)
+          <input type="number" min={1} max={128} value={minLen} onChange={(x) => { const n = Math.min(128, Math.max(1, Number(x.target.value) || 1)); setMinLen(n); setMinPassLength(n); }} />
+          {minLen < 8 && <span className="warn">Sehr kurze Passphrasen sind leicht zu erraten. Wer Zugriff auf die verschlüsselten Daten bekommt, kann sie durchprobieren.</span>}
+        </label>
         <p className="warn">Es gibt kein „Passwort vergessen“. Ohne Passphrase und ohne Backup ist dein Konto verloren.</p>
         {err && <p className="error" role="alert">{err}</p>}
         <button className="primary" disabled={busy}>{busy ? 'Bitte warten …' : restore ? 'Gerät anmelden' : 'Konto erstellen'}</button>
@@ -83,12 +90,14 @@ export function Unlock({ address }: { address: string }) {
   const [pass, setPass] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [remember, setRemember] = useState<RememberMode>(rememberMode());
   async function submit(ev: React.FormEvent) {
     ev.preventDefault();
     setBusy(true);
     setErr('');
     try {
       await e.unlock(pass);
+      await saveSession(pass, remember);
     } catch (x) {
       setErr((x as Error).message || 'Entsperren fehlgeschlagen');
     } finally {
@@ -101,6 +110,12 @@ export function Unlock({ address }: { address: string }) {
         <h1>Entsperren</h1>
         <p className="muted">{address}</p>
         <label>Passphrase<input type="password" value={pass} onChange={(x) => setPass(x.target.value)} autoFocus autoComplete="current-password" /></label>
+        <label>Angemeldet bleiben nach Neuladen
+          <select value={remember} onChange={(x) => { const m = x.target.value as RememberMode; setRemember(m); setRememberMode(m); }}>
+            {(Object.keys(REMEMBER_LABEL) as RememberMode[]).filter((m) => persistentAvailable() || m === 'off' || m === 'tab').map((m) => <option key={m} value={m}>{REMEMBER_LABEL[m]}</option>)}
+          </select>
+          {remember !== 'off' && <span className="muted small">Die Passphrase wird dafür auf diesem Gerät vorgehalten. Nur auf eigenen Geräten verwenden; „Sperren“ löscht sie sofort.</span>}
+        </label>
         {err && <p className="error" role="alert">{err}</p>}
         <button className="primary" disabled={busy || !pass}>{busy ? 'Entsperre …' : 'Entsperren'}</button>
       </form>

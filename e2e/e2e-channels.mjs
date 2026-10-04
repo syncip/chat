@@ -82,7 +82,7 @@ try {
   console.log('✔ Moderation: Beitrag löschen');
 
   // --- Sperre ---
-  await memberAction(alice, addr('bob'), (li) => li.getByRole('button', { name: 'Sperren' }).click());
+  await memberAction(alice, addr('bob'), (li) => li.getByRole('button', { name: 'Sperren', exact: true }).click());
   await bob.getByText(/gesperrt/).first().waitFor({ timeout: 20000 });
   console.log('✔ Sperre');
 

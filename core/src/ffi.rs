@@ -112,6 +112,10 @@ impl MlsClient {
             Ok(serde_json::json!({"mailbox_id": i.mailbox_id, "token": i.token, "key": hex(&i.key)}).to_string())
         })
     }
+    /// Schlüssel (32 Byte) für den Konto-Sync-Blob.
+    pub fn sync_key(&self) -> R<Vec<u8>> {
+        self.with(|c| Ok(c.sync_key()?.to_vec()))
+    }
     pub fn key_packages(&self, n: u32, last_resort: bool) -> R<Vec<Vec<u8>>> {
         self.with(|c| c.key_packages(n as usize, last_resort))
     }

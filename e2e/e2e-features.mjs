@@ -64,7 +64,7 @@ try {
 
   // Einmal-Nachrichten gibt es nur in 1:1: nach Sperren/Entsperren bleibt sie gelöscht
   await alice.getByTitle('Einstellungen').click();
-  await alice.getByRole('button', { name: 'Sperren' }).click();
+  await alice.getByRole('button', { name: 'Sperren', exact: true }).click();
   await alice.getByLabel('Passphrase', { exact: true }).fill('correct horse battery');
   await alice.getByRole('button', { name: 'Entsperren' }).click();
   await alice.locator('.conv').first().click();

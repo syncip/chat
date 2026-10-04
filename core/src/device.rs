@@ -130,6 +130,15 @@ pub fn derive_inbox(account_secret: &[u8], device_id: &str) -> Result<Inbox> {
     })
 }
 
+/// Schlüssel für den verschlüsselten Konto-Sync-Blob (aus dem AIK abgeleitet; alle Geräte des Kontos kommen auf denselben).
+pub fn derive_sync_key(account_secret: &[u8]) -> Result<[u8; 32]> {
+    let hk = Hkdf::<Sha256>::new(Some(b"chat-sync-v1"), account_secret);
+    let mut key = [0u8; 32];
+    hk.expand(b"account-sync", &mut key)
+        .map_err(|_| Error::Crypto("hkdf"))?;
+    Ok(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +194,13 @@ mod tests {
             &dpk
         )
         .is_err());
+    }
+
+    #[test]
+    fn sync_key_is_deterministic_and_secret_bound() {
+        let a = derive_sync_key(b"secret").unwrap();
+        assert_eq!(a, derive_sync_key(b"secret").unwrap());
+        assert_ne!(a, derive_sync_key(b"other").unwrap());
     }
 
     #[test]

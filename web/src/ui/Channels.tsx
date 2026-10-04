@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChannelMember, ChannelPolicy, ChannelState, ChPost } from '../lib/types';
 import { NeedsCaptcha, type ChannelInfo } from '../lib/channels';
-import { copyText } from '../lib/util';
+import { baseUrl, copyText } from '../lib/util';
 import { useEngine } from './hooks';
 import { Dialog } from './Dialog';
 import { Parts } from './Message';
@@ -65,18 +65,28 @@ export function CreateChannel({ onClose, onCreated }: { onClose: () => void; onC
   const e = useEngine();
   const [title, setTitle] = useState('');
   const [p, setP] = useState<ChannelPolicy>(DEFAULT_POLICY);
+  const [isPublic, setPublic] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   return (
     <Dialog title="Neuer öffentlicher Kanal" onClose={onClose}>
       <p className="muted small">Jeder mit dem Link kann beitreten. Der Kanalschlüssel steht nur im Link (hinter dem #) und wird nie an den Server gesendet. Der Server sieht keine Inhalte, erzwingt aber Rechte und Sperren.</p>
       <label>Name<input value={title} onChange={(x) => setTitle(x.target.value)} maxLength={80} /></label>
+      <label className="check">
+        <input type="checkbox" checked={isPublic} onChange={(x) => setPublic(x.target.checked)} />
+        <span><strong>Öffentlich sichtbar</strong> – ohne Konto lesbar und verfolgbar</span>
+      </label>
+      {isPublic && (
+        <div className="banner bad" role="alert">
+          <span>⚠ Öffentlicher Kanal: Alle Beiträge sind <strong>unverschlüsselt und für jeden im Internet lesbar</strong> (auch ohne Konto, auch für Suchmaschinen/Skripte, sobald der Link bekannt ist). Der Server kann alles mitlesen. Das lässt sich später nicht ändern. Schreiben dürfen weiterhin nur Mitglieder mit Konto.</span>
+        </div>
+      )}
       <PolicyForm p={p} onChange={setP} />
       {err && <p className="error">{err}</p>}
       <button className="primary" disabled={busy || !title.trim()} onClick={async () => {
         setBusy(true);
         setErr('');
-        try { onCreated(await e.channels.create(title, p)); } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
+        try { onCreated(await e.channels.create(title, p, isPublic)); } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
       }}>Kanal erstellen</button>
     </Dialog>
   );
@@ -185,6 +195,7 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
         </div>
         <button onClick={() => setInfo(true)} aria-label="Details">ⓘ</button>
       </header>
+      {ch.policy.public && <div className="banner bad" role="note">🌐 Öffentlicher Kanal: Inhalte sind unverschlüsselt und für jeden ohne Konto lesbar.</div>}
       <div className="messages">
         {ch.posts.map((p) => <PostView key={p.id} ch={ch} p={p} isMod={isMod} onErr={setErr} />)}
         <div ref={bottom} />
@@ -212,19 +223,23 @@ function PostView({ ch, p, isMod, onErr }: { ch: ChannelState; p: ChPost; isMod:
   const mine = p.from === e.state!.me.address;
   const run = (f: () => Promise<void>) => f().catch((x) => onErr((x as Error).message));
   return (
-    <div className={`msg ${mine ? 'mine' : 'theirs'}`}>
-      <div className="meta small muted">
-        {p.from} · {new Date(p.ts).toLocaleString()}
-        {isMod && !p.deleted && (
-          <span className="row">
-            {' '}
-            <button className="link" onClick={() => run(() => e.channels.mod(ch.id, { action: 'delete', post_id: p.id }))}>Löschen</button>
-            {!mine && <button className="link" onClick={() => run(() => e.channels.mod(ch.id, { action: 'ban', target: p.ik }))}>Sperren</button>}
-            {!mine && <button className="link" onClick={() => run(() => e.channels.mod(ch.id, { action: 'timeout', target: p.ik, seconds: 3600 }))}>1 Std stumm</button>}
-          </span>
-        )}
+    <div className={`msg ${mine ? 'mine' : ''}`}>
+      <div className="bubble">
+        <div className="sender">
+          {p.hook ? <span title="Über einen Webhook eingegangen (vom Server verfasst, nicht signiert)">🔔 {p.hook} (Webhook)</span> : p.from}
+        </div>
+        {p.deleted ? <em className="muted">Beitrag entfernt</em> : p.bad ? <em className="error">Beitrag konnte nicht verifiziert werden</em> : <Parts parts={p.parts} />}
+        <div className="meta">
+          <span className="muted small">{new Date(p.ts).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+          {isMod && !p.deleted && (
+            <>
+              <button className="link small" onClick={() => run(() => e.channels.mod(ch.id, { action: 'delete', post_id: p.id }))}>Löschen</button>
+              {!mine && !p.hook && <button className="link small" onClick={() => run(() => e.channels.mod(ch.id, { action: 'ban', target: p.ik }))}>Sperren</button>}
+              {!mine && !p.hook && <button className="link small" onClick={() => run(() => e.channels.mod(ch.id, { action: 'timeout', target: p.ik, seconds: 3600 }))}>1 Std stumm</button>}
+            </>
+          )}
+        </div>
       </div>
-      {p.deleted ? <em className="muted">Beitrag entfernt</em> : p.bad ? <em className="error">Beitrag konnte nicht verifiziert werden</em> : <Parts parts={p.parts} />}
     </div>
   );
 }
@@ -238,6 +253,8 @@ function ChannelInfoDialog({ ch, onClose, onGone }: { ch: ChannelState; onClose:
   const [title, setTitle] = useState(ch.title);
   const [err, setErr] = useState('');
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const dirty = title !== ch.title || JSON.stringify({ ...p, public: undefined }) !== JSON.stringify({ ...ch.policy, public: undefined });
   const run = async (f: () => Promise<void>) => { setErr(''); try { await f(); if (isMod) setMembers(await e.channels.members(ch.id)); } catch (x) { setErr((x as Error).message); } };
   useEffect(() => { if (isMod) void e.channels.members(ch.id).then(setMembers).catch((x) => setErr((x as Error).message)); }, [ch.id, isMod, e]);
   const act = (m: ChannelMember, body: object) => run(() => e.channels.mod(ch.id, { target: m.ik, ...body } as never));
@@ -249,14 +266,27 @@ function ChannelInfoDialog({ ch, onClose, onGone }: { ch: ChannelState; onClose:
         <input readOnly value={e.channels.link(ch.id)} onFocus={(x) => x.target.select()} />
         <button onClick={async () => { await copyText(e.channels.link(ch.id)); setCopied(true); }}>{copied ? 'Kopiert' : 'Kopieren'}</button>
       </div>
+      {ch.policy.public && (
+        <>
+          <div className="banner bad" role="note">🌐 Dieser Kanal ist <strong>öffentlich</strong>: Beiträge sind unverschlüsselt und für jeden ohne Konto lesbar.</div>
+          <label>Öffentlicher Lese-Link (ohne Konto)<input readOnly value={e.channels.publicLink(ch.id)} onFocus={(x) => x.target.select()} /></label>
+          <label>Live-Feed (Server-Sent Events, z. B. curl -N)<input readOnly value={`${baseUrl(ch.server)}/v1/channels/${ch.id}/public/events`} onFocus={(x) => x.target.select()} /></label>
+        </>
+      )}
       {isOwner && (
         <>
           <h3>Einstellungen (global)</h3>
-          <label>Name<input value={title} onChange={(x) => setTitle(x.target.value)} maxLength={80} /></label>
-          <PolicyForm p={p} onChange={setP} />
-          <button onClick={() => run(() => e.channels.update(ch.id, { title, policy: p }))}>Speichern</button>
+          <label>Name<input value={title} onChange={(x) => { setTitle(x.target.value); setSaved(false); }} maxLength={80} /></label>
+          <PolicyForm p={p} onChange={(v) => { setP(v); setSaved(false); }} />
+          <div className="row">
+            <button className="primary" disabled={!dirty} onClick={() => run(async () => { await e.channels.update(ch.id, { title, policy: p }); setSaved(true); })}>Speichern</button>
+            <button disabled={!dirty} onClick={() => { setTitle(ch.title); setP(ch.policy); }}>Zurücksetzen</button>
+            {dirty && <span className="warn">Ungespeicherte Änderungen</span>}
+            {saved && !dirty && <span className="ok">✔ Gespeichert</span>}
+          </div>
         </>
       )}
+      {isMod && <HooksSection ch={ch} />}
       {isMod && (
         <>
           <h3>Mitglieder</h3>
@@ -298,5 +328,63 @@ function ChannelInfoDialog({ ch, onClose, onGone }: { ch: ChannelState; onClose:
       </div>
       {err && <p className="error">{err}</p>}
     </Dialog>
+  );
+}
+
+/** Webhooks: Andere Apps senden per HTTP Nachrichten in den Kanal (ntfy-kompatibel, siehe docs/NTFY.md). */
+function HooksSection({ ch }: { ch: ChannelState }) {
+  const e = useEngine();
+  const [hooks, setHooks] = useState<{ id: string; name: string; created_at: number; last_used: number }[]>([]);
+  const [name, setName] = useState('');
+  const [created, setCreated] = useState<{ name: string; url: string } | null>(null);
+  const [err, setErr] = useState('');
+  const load = () => e.channels.hooks(ch.id).then(setHooks).catch((x) => setErr((x as Error).message));
+  useEffect(() => { void load(); }, [ch.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const run = async (f: () => Promise<void>) => { setErr(''); try { await f(); await load(); } catch (x) { setErr((x as Error).message); } };
+  return (
+    <>
+      <h3>Webhooks (ntfy-kompatibel)</h3>
+      <details>
+        <summary>Was ist das? So funktioniert es</summary>
+        <div className="small">
+          <p>Mit einem Webhook können andere Programme (Skripte, Monitoring, Router, Home Assistant, CI …) per HTTP eine Benachrichtigung in diesen Kanal schicken – genau wie bei <strong>ntfy</strong>. Jeder Webhook hat eine eigene geheime Adresse; wer sie kennt, kann in den Kanal schreiben. Löschst du den Webhook, ist die Adresse sofort wertlos.</p>
+          <pre className="code">{`# einfache Nachricht
+curl -d "Backup fertig" ${baseUrl(ch.server)}/h/<TOKEN>
+
+# mit Titel, Priorität und Tags (wie bei ntfy)
+curl -H "Title: Nachtlauf" -H "Priority: high" -H "Tags: white_check_mark,backup" \
+     -d "Alles gesichert" ${baseUrl(ch.server)}/h/<TOKEN>
+
+# JSON
+curl -H "Content-Type: application/json" \
+     -d '{"title":"Alarm","message":"Server down","priority":5,"tags":["rotating_light"]}' ${baseUrl(ch.server)}/h/<TOKEN>`}</pre>
+          <p>Unterstützt: Nachricht (Body oder <code>?message=</code>), <code>Title</code>/<code>t</code>, <code>Priority</code>/<code>p</code> (1–5, min–urgent), <code>Tags</code>/<code>ta</code> (bekannte Emoji-Namen wie <code>warning</code> werden zu Symbolen), <code>Click</code>, auch als <code>X-</code>-Header oder URL-Parameter, sowie <code>GET …/publish</code>, <code>/send</code>, <code>/trigger</code>. In ntfy-Apps und -Tools trägst du die Webhook-Adresse als Ziel ein. Nicht unterstützt: Anhänge, Aktionsknöpfe, Zeitplanung, Abonnieren über ntfy-Clients.</p>
+          {ch.policy.public
+            ? <p>Dieser Kanal ist öffentlich, die Nachrichten sind ohnehin lesbar.</p>
+            : <p className="warn">⚠ Nicht öffentliche Kanäle sind Ende-zu-Ende-verschlüsselt. Damit der Server Webhook-Nachrichten verschlüsseln kann, bekommt er beim Anlegen des Webhooks den Kanalschlüssel. Der Server (und wer den Webhook-Absender kontrolliert) sieht dann diese Nachrichten im Klartext, und der Server könnte den Kanal mitlesen. Löschst du alle Webhooks, speichert er den Schlüssel nicht mehr.</p>}
+        </div>
+      </details>
+      {hooks.map((h) => (
+        <div key={h.id} className="row">
+          <span className="grow">🔔 {h.name} <span className="muted small">· {h.last_used ? `zuletzt ${new Date(h.last_used * 1000).toLocaleString()}` : 'noch nie benutzt'}</span></span>
+          <button className="danger" onClick={() => { if (confirm(`Webhook „${h.name}“ löschen? Die Adresse funktioniert dann nicht mehr.`)) void run(async () => { await e.channels.deleteHook(ch.id, h.id); setCreated(null); }); }}>Löschen</button>
+        </div>
+      ))}
+      {hooks.length === 0 && <p className="muted small">Noch keine Webhooks.</p>}
+      <div className="row">
+        <input placeholder="Name, z. B. Monitoring" value={name} maxLength={40} onChange={(x) => setName(x.target.value)} />
+        <button disabled={!name.trim()} onClick={() => run(async () => { setCreated(await e.channels.createHook(ch.id, name.trim())); setName(''); })}>Webhook anlegen</button>
+      </div>
+      {created && (
+        <div className="banner warn" role="status">
+          <div className="grow">
+            <div>Webhook „{created.name}“ – Adresse <strong>jetzt kopieren</strong>, sie wird nicht wieder angezeigt:</div>
+            <input readOnly value={created.url} onFocus={(x) => x.target.select()} />
+          </div>
+          <button onClick={() => copyText(created.url)}>Kopieren</button>
+        </div>
+      )}
+      {err && <p className="error">{err}</p>}
+    </>
   );
 }

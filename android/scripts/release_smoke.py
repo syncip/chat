@@ -80,18 +80,46 @@ def fail(msg):
     sys.exit(1)
 
 
-def wait(desc, timeout=60, index=0, **kw):
+def screen_size():
+    m = re.search(r"(\d+)x(\d+)", adb("shell", "wm", "size"))
+    return (int(m.group(1)), int(m.group(2))) if m else (1080, 2400)
+
+
+W, H = 0, 0
+
+
+def keyboard_shown():
+    return "mInputShown=true" in adb("shell", "dumpsys", "input_method", check=False)
+
+
+def hide_keyboard():
+    if keyboard_shown():
+        adb("shell", "input", "keyevent", "4")  # Zurück schließt nur die Tastatur
+        time.sleep(0.4)
+
+
+def swipe_up():
+    adb("shell", "input", "swipe", str(W // 2), str(int(H * 0.7)), str(W // 2), str(int(H * 0.35)), "400")
+    time.sleep(0.5)
+
+
+def wait(desc, timeout=60, index=0, scroll=False, **kw):
+    """Wartet auf ein Element; mit scroll=True wird gewischt, bis es vollständig im oberen, sicher sichtbaren Bereich liegt."""
     end = time.time() + timeout
     swiped = 0
     while time.time() < end:
         root = dump()
         found = find_all(root, **kw)
         if len(found) > index:
-            return found[index]
-        # Elemente unterhalb des sichtbaren Bereichs: einmal pro Durchgang nach oben wischen (max. 3x)
-        if kw.get("rid") and swiped < 3 and time.time() > end - timeout + 3:
-            adb("shell", "input", "swipe", "540", "1500", "540", "700", "300")
+            n = found[index]
+            y2 = int(re.findall(r"\d+", n.get("bounds"))[3])
+            if not scroll or y2 <= H * 0.55 or swiped >= 8:
+                return n
+        if scroll and swiped < 8:
+            hide_keyboard()
+            swipe_up()
             swiped += 1
+            continue
         time.sleep(0.7)
     fail("Zeitüberschreitung: " + desc)
 
@@ -102,16 +130,25 @@ def center(n):
 
 
 def tap(desc, **kw):
+    if kw.get("rid"):
+        kw.setdefault("scroll", True)
     x, y = center(wait(desc, **kw))
     adb("shell", "input", "tap", str(x), str(y))
     time.sleep(0.4)
 
 
 def type_into(desc, value, **kw):
+    hide_keyboard()
     tap(desc, **kw)
+    # Fokus prüfen, sonst landet der Text im vorherigen Feld
+    for _ in range(3):
+        n = find_all(dump(), **kw)
+        if n and n[0].get("focused") == "true":
+            break
+        tap(desc, **kw)
     adb("shell", "input", "text", value)
-    adb("shell", "input", "keyevent", "111")  # Tastatur schließen (ESC)
     time.sleep(0.3)
+    hide_keyboard()
 
 
 def device_credential():
@@ -132,6 +169,8 @@ def invite():
 
 
 # --- Vorbereitung ---
+W, H = screen_size()
+print("Bildschirm: %dx%d" % (W, H))
 adb("shell", "locksettings", "set-pin", DEVICE_PIN, check=False)  # Gerätesperre wie auf einem echten Handy
 adb("uninstall", PKG, check=False)
 adb("install", "-r", APK)
@@ -156,7 +195,7 @@ for i in range(2):
     x, y = center(wait("Backup-Feld %d" % i, cls="android.widget.EditText", index=i))
     adb("shell", "input", "tap", str(x), str(y))
     adb("shell", "input", "text", "backuppass1")
-    adb("shell", "input", "keyevent", "111")
+    hide_keyboard()
 tap("Backup-Datei speichern", text="^Backup-Datei speichern$")
 tap("Speichern im Dateidialog", timeout=30, text="^(SAVE|Save|Speichern|SPEICHERN)$")
 tap("Backup bestätigt", timeout=30, text="Ich habe das Backup sicher abgelegt")

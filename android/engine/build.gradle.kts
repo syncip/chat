@@ -64,6 +64,15 @@ tasks.test {
     maxHeapSize = "1g"
 }
 
+// Interop-Gegenstelle für den Konto-Sync (siehe e2e/e2e-android-sync.mjs)
+tasks.register<JavaExec>("runSyncPeer") {
+    dependsOn("classes")
+    classpath = sourceSets.main.get().runtimeClasspath + jnaJar
+    mainClass.set("chat.engine.tools.SyncPeerKt")
+    systemProperty("jna.library.path", coreDir.resolve("target/debug").absolutePath)
+    args = (findProperty("peerArgs") as String? ?: "").split(" ").filter { it.isNotEmpty() }
+}
+
 // Interop-Gegenstelle (siehe e2e/e2e-android-interop.mjs)
 tasks.register<JavaExec>("runPeer") {
     dependsOn("classes")

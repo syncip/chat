@@ -102,8 +102,10 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
                         val sec = securityReport(s, online, vm.engine.info?.client_hash).first
                         var menu by remember { mutableStateOf(false) }
                         TextButton(onClick = { dialog = "new" }) { Text("＋") }
+                        TextButton(onClick = { vm.run { vm.engine.lock() } }) { Text("🔒") }
                         TextButton(onClick = { menu = true }) { Text("⋮", color = if (sec == Level.Ok) androidx.compose.ui.graphics.Color.Unspecified else levelColor(sec)) }
                         androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("🔒 Sperren") }, onClick = { menu = false; vm.run { vm.engine.lock() } })
                             androidx.compose.material3.DropdownMenuItem(text = { Text("⚙ Einstellungen") }, onClick = { menu = false; screen = Screen.Settings })
                             androidx.compose.material3.DropdownMenuItem(text = { Text("📁 Alle Dateien") }, onClick = { menu = false; screen = Screen.Files(null) })
                             androidx.compose.material3.DropdownMenuItem(text = { Text("🛡 Sicherheit") }, onClick = { menu = false; dialog = "security" })

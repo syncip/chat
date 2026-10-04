@@ -477,11 +477,10 @@ class Engine(
         connect()
         channels.start()
         tick = scope.launch(dispatcher) {
-            var n = 0
             while (true) {
                 delay(30_000); purgeExpired(); retryOutbox()
                 incoming.trySend { catchUp() } // Sicherheitsnetz: verpasste Nachrichten nachholen, falls die Verbindung unbemerkt hängt
-                if (++n % 2 == 0) incoming.trySend { syncNow() } // Sicherheitsnetz für verpasste Sync-Ereignisse
+                incoming.trySend { syncNow() } // Sicherheitsnetz für verpasste Sync-Ereignisse (Kanäle/Einstellungen anderer Geräte)
             }
         }
     }
@@ -490,6 +489,7 @@ class Engine(
     fun nudge() {
         if (closed || state == null || api == null) return
         incoming.trySend { catchUp() }
+        incoming.trySend { syncNow() }
         if (!_online.value) {
             backoff = 1000
             scope.launch(dispatcher) { wsJob?.cancel(); ws?.cancel(); ws = null; connect() }

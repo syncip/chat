@@ -33,6 +33,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import chat.android.BiometricHelper
+import chat.android.PinHelper
+import androidx.compose.material3.HorizontalDivider
 import chat.android.SecureBlobStore
 import chat.engine.baseUrl
 import chat.engine.normalizeServer
@@ -149,6 +151,8 @@ fun UnlockScreen(vm: AppViewModel, activity: FragmentActivity) {
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf("") }
     val bio = remember { BiometricHelper.isEnrolled(activity) && BiometricHelper.available(activity) }
+    var pinOn by remember { mutableStateOf(PinHelper.isEnrolled(activity)) }
+    var pin by remember { mutableStateOf("") }
 
     fun unlock(p: String) {
         busy = true
@@ -168,7 +172,18 @@ fun UnlockScreen(vm: AppViewModel, activity: FragmentActivity) {
         if (bio) {
             OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
                 BiometricHelper.unlock(activity) { r -> r.onSuccess { unlock(it) }.onFailure { err = "Biometrie fehlgeschlagen. Bitte Passphrase eingeben." } }
-            }) { Text("Mit Biometrie entsperren") }
+            }) { Text("Mit Fingerabdruck / Gerätesperre entsperren") }
+        }
+        if (pinOn) {
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            OutlinedTextField(
+                value = pin, onValueChange = { pin = it.filter(Char::isDigit).take(PinHelper.MAX_LEN); err = "" }, label = { Text("App-PIN") }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            )
+            OutlinedButton(enabled = !busy && pin.length >= PinHelper.MIN_LEN, modifier = Modifier.fillMaxWidth(), onClick = {
+                PinHelper.unlock(activity, pin).onSuccess { pin = ""; unlock(it) }.onFailure { err = it.message ?: "PIN falsch."; pin = ""; pinOn = PinHelper.isEnrolled(activity) }
+            }) { Text("Mit PIN entsperren") }
         }
     }
 }
@@ -176,5 +191,6 @@ fun UnlockScreen(vm: AppViewModel, activity: FragmentActivity) {
 /** Beim Löschen des Kontos auch Keystore-Schlüssel und Biometrie entfernen. */
 fun wipeSecrets(activity: FragmentActivity) {
     BiometricHelper.disable(activity)
+    PinHelper.disable(activity)
     SecureBlobStore.destroyKey()
 }

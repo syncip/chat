@@ -119,8 +119,9 @@ class Engine(
 
     private suspend fun syncNow() {
         if (state == null || api == null) return
-        try { accountSync.run() } catch (e: Exception) { System.err.println("sync: $e") }
-        if (state != null) lastSyncSig = accountSync.signature()
+        // Stand VOR dem Abgleich merken: Änderungen, die währenddessen passieren, müssen beim nächsten Durchlauf noch auffallen.
+        val before = accountSync.signature()
+        try { accountSync.run(); lastSyncSig = before } catch (e: Exception) { System.err.println("sync: $e") }
     }
 
     private fun emit() { _version.value = _version.value + 1 }

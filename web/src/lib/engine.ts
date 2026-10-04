@@ -298,12 +298,14 @@ export class Engine {
 
   private async syncNow(): Promise<void> {
     if (!this.state || !this.api) return;
+    // Stand VOR dem Abgleich merken: Änderungen, die währenddessen passieren, müssen beim nächsten Durchlauf noch auffallen.
+    const before = this.accountSync.signature();
     try {
       await this.accountSync.run();
+      this.lastSyncSig = before;
     } catch (e) {
       console.warn('sync', e);
     }
-    if (this.state) this.lastSyncSig = this.accountSync.signature();
   }
 
   private async flush(): Promise<void> {
@@ -1165,6 +1167,25 @@ export class Engine {
     const conv = s.conversations[id];
     if (!conv || conv.status !== 'active') throw new Error('Unterhaltung nicht aktiv.');
     if (o.once && conv.kind !== 'dm') throw new Error('Einmal-Nachrichten gibt es nur in privaten 1:1-Chats.');
+    const parts = await this.buildParts(o);
+    if (parts.length === 0) return;
+    const env = this.newEnvelope({ kind: 'message', parts, ...(o.once ? { once: true } : {}) });
+    const msg: Msg = { id: env.id, from: s.me.address, ts: env.ts, parts, status: 'sending', reactions: {}, ...(o.once ? { once: true } : {}) };
+    if (conv.disappearSeconds > 0) msg.expiresAt = Date.now() + conv.disappearSeconds * 1000;
+    conv.messages.push(msg);
+    this.dirty();
+    const n = await this.broadcast(conv, env);
+    // Ein Empfangsstatus (delivered/read) kann bereits eingetroffen sein, während wir noch auf den Server warteten.
+    if (msg.status === 'sending') msg.status = n > 0 ? 'sent' : 'failed';
+    if (o.once && s.onceDropOwnCopy) {
+      msg.parts = [];
+      msg.consumed = true;
+    }
+    this.dirty();
+  }
+
+  /** Baut die Inhalte (Zitat, Text, Code, hochgeladene verschlüsselte Dateien) mit Prüfung der Server-Limits. */
+  private async buildParts(o: { text?: string; code?: { lang: string; body: string }; quote?: Msg; files?: File[] }): Promise<Part[]> {
     const lim = this.info?.limits;
     const parts: Part[] = [];
     if (o.quote) parts.push({ type: 'quote', reference: o.quote.id, snippet: snippetOf(o.quote).slice(0, 200) });
@@ -1183,20 +1204,14 @@ export class Engine {
       for (const f of files) if (f.size > lim.max_file_size) throw new Error(`${f.name}: Datei zu groß.`);
     }
     for (const f of files) parts.push(await this.uploadFile(f));
+    return parts;
+  }
+
+  /** Beitrag in einen Kanal (Text, Code, Bilder/Audio/Video/Dateien). Dateien liegen verschlüsselt beim Heimatserver des Absenders, ihr Schlüssel steht im Beitrag. */
+  async postToChannel(id: string, o: { text?: string; code?: { lang: string; body: string }; files?: File[] }): Promise<void> {
+    const parts = await this.buildParts(o);
     if (parts.length === 0) return;
-    const env = this.newEnvelope({ kind: 'message', parts, ...(o.once ? { once: true } : {}) });
-    const msg: Msg = { id: env.id, from: s.me.address, ts: env.ts, parts, status: 'sending', reactions: {}, ...(o.once ? { once: true } : {}) };
-    if (conv.disappearSeconds > 0) msg.expiresAt = Date.now() + conv.disappearSeconds * 1000;
-    conv.messages.push(msg);
-    this.dirty();
-    const n = await this.broadcast(conv, env);
-    // Ein Empfangsstatus (delivered/read) kann bereits eingetroffen sein, während wir noch auf den Server warteten.
-    if (msg.status === 'sending') msg.status = n > 0 ? 'sent' : 'failed';
-    if (o.once && s.onceDropOwnCopy) {
-      msg.parts = [];
-      msg.consumed = true;
-    }
-    this.dirty();
+    await this.channels.post(id, parts);
   }
 
   private async uploadFile(f: File): Promise<Part> {

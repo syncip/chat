@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChannelMember, ChannelPolicy, ChannelState, ChPost } from '../lib/types';
 import { NeedsCaptcha, type ChannelInfo } from '../lib/channels';
-import { baseUrl, copyText } from '../lib/util';
+import { baseUrl, copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
 import { Dialog } from './Dialog';
 import { Parts } from './Message';
@@ -160,6 +160,8 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const isMod = ch.me.status === 'active' && (ch.me.role === 'owner' || ch.me.role === 'mod');
 
@@ -169,8 +171,9 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
     setBusy(true);
     setErr('');
     try {
-      await e.channels.post(ch.id, [code ? { type: 'code', lang, body: text } : { type: 'text', body: text }]);
+      await e.postToChannel(ch.id, { text: code ? undefined : text, code: code ? { lang, body: text } : undefined, files });
       setText('');
+      setFiles([]);
       setCode(false);
     } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
   }
@@ -202,13 +205,20 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
       </div>
       {blocker ? <div className="banner">{blocker}</div> : (
         <div className="composer">
+          {files.length > 0 && (
+            <div className="files">
+              {files.map((f, i) => <span key={i} className="chip">{f.name} ({formatBytes(f.size)}) <button className="link" onClick={() => setFiles(files.filter((_, j) => j !== i))}>✕</button></span>)}
+            </div>
+          )}
           {err && <div className="error small" role="alert">{err}</div>}
           <div className="row end">
+            <button title="Bild, Video, Audio oder Datei anhängen" aria-label="Datei anhängen" onClick={() => fileInput.current?.click()}>📎</button>
+            <input ref={fileInput} type="file" multiple hidden onChange={(x) => { setFiles([...files, ...Array.from(x.target.files ?? [])]); x.target.value = ''; }} />
             <button title="Codeblock" className={code ? 'on' : ''} onClick={() => setCode(!code)}>{'</>'}</button>
             {code && <input className="lang" placeholder="Sprache" value={lang} onChange={(x) => setLang(x.target.value)} />}
             <textarea value={text} rows={code ? 6 : 2} className={code ? 'mono' : ''} placeholder="Beitrag schreiben …" onChange={(x) => setText(x.target.value)}
               onKeyDown={(x) => { if (x.key === 'Enter' && !x.shiftKey && !code) { x.preventDefault(); if (!busy && text.trim()) void send(); } }} />
-            <button className="primary" disabled={busy || !text.trim()} onClick={send}>{busy ? '…' : 'Senden'}</button>
+            <button className="primary" disabled={busy || (!text.trim() && files.length === 0)} onClick={send}>{busy ? '…' : 'Senden'}</button>
           </div>
         </div>
       )}

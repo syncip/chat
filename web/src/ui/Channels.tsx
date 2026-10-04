@@ -5,7 +5,7 @@ import { baseUrl, copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
 import { Dialog } from './Dialog';
 import { Parts } from './Message';
-import { Avatar } from './Avatar';
+import { Avatar, AvatarPicker } from './Avatar';
 
 const DEFAULT_POLICY: ChannelPolicy = { join_mode: 'open', pow_bits: 16, probation_seconds: 0, members_can_write: false, slow_mode_seconds: 0 };
 
@@ -192,7 +192,7 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
     <div className="chat">
       <header className="chat-header">
         <button className="back" onClick={onBack} aria-label="Zurück">←</button>
-        <Avatar name={ch.title} size={40} channel />
+        <Avatar name={ch.title} size={40} channel src={ch.avatar} />
         <div className="grow"><strong>📢 {ch.title}</strong>
           <div className="muted small">{ROLE[ch.me.role]} · {ch.server}</div>
         </div>
@@ -270,6 +270,7 @@ function ChannelInfoDialog({ ch, onClose, onGone }: { ch: ChannelState; onClose:
   const act = (m: ChannelMember, body: object) => run(() => e.channels.mod(ch.id, { target: m.ik, ...body } as never));
   return (
     <Dialog title={ch.title} onClose={onClose} wide>
+      {isMod && <AvatarPicker name={ch.title} src={ch.avatar} channel label="Kanalbild wählen" onError={setErr} onPick={(d) => run(() => e.channels.update(ch.id, { avatar: d, policy: ch.policy }))} />}
       <h3>Einladungslink</h3>
       <p className="muted small">Der Link enthält den Kanalschlüssel. Wer ihn hat, kann (nach den Beitrittsregeln) lesen. Nach einer Sperre kennt die Person den Schlüssel weiterhin, der Server verweigert ihr aber Lesen und Schreiben.</p>
       <div className="row">

@@ -10,6 +10,23 @@ import { b64, baseUrl, dec, enc, hex, randomBytes, sha256, unb64 } from './util'
 const KIND_CHANNEL = 3;
 const TITLE_GID = enc.encode('title');
 
+const MAX_AVATAR = 16 * 1024;
+
+/** Zerlegt einen Titel, der ggf. ein Kanalbild enthält. */
+export function splitTitle(t: string): { title: string; avatar?: string } {
+  if (t.startsWith('{"t":')) {
+    try {
+      const j = JSON.parse(t) as { t?: unknown; i?: unknown };
+      if (typeof j.t === 'string') return { title: j.t, avatar: typeof j.i === 'string' && j.i.startsWith('data:image/') && j.i.length <= MAX_AVATAR ? j.i : undefined };
+    } catch { /* normaler Titel */ }
+  }
+  return { title: t };
+}
+
+export function joinTitle(title: string, avatar?: string): string {
+  return avatar ? JSON.stringify({ t: title, i: avatar }) : title;
+}
+
 export interface ChannelLink {
   s: string; // Server
   c: string; // Kanal-ID
@@ -210,9 +227,18 @@ export class ChannelManager {
   }
 
   private title(key: string, enc64: string): string {
-    if (!key) return dec.decode(unb64(enc64));
-    const p = this.open(key, TITLE_GID, unb64(enc64));
-    return p ? dec.decode(p) : '(unbekannt)';
+    return this.meta(key, enc64).title;
+  }
+
+  /** Titel (und optional Kanalbild): Klartext oder `{"t":…,"i":"data:image/…"}`, bei privaten Kanälen mit dem Kanalschlüssel verschlüsselt. */
+  private meta(key: string, enc64: string): { title: string; avatar?: string } {
+    let t: string;
+    if (!key) t = dec.decode(unb64(enc64));
+    else {
+      const p = this.open(key, TITLE_GID, unb64(enc64));
+      t = p ? dec.decode(p) : '(unbekannt)';
+    }
+    return splitTitle(t);
   }
 
   link(id: string): string {
@@ -342,10 +368,11 @@ export class ChannelManager {
     this.h.notify();
   }
 
-  async update(id: string, opts: { title?: string; policy: ChannelPolicy }): Promise<void> {
+  async update(id: string, opts: { title?: string; avatar?: string | null; policy: ChannelPolicy }): Promise<void> {
     const c = this.channels[id];
     const body: Record<string, unknown> = { policy: opts.policy };
-    if (opts.title && opts.title !== c.title) body.title_enc = b64(this.seal(c.key, TITLE_GID, enc.encode(opts.title)));
+    const avatar = opts.avatar === undefined ? c.avatar : opts.avatar || undefined;
+    if ((opts.title && opts.title !== c.title) || avatar !== c.avatar) body.title_enc = b64(this.seal(c.key, TITLE_GID, enc.encode(joinTitle(opts.title || c.title, avatar))));
     await this.api(c).call('PUT', '/settings', body);
     await this.sync(id);
   }
@@ -441,7 +468,11 @@ export class ChannelManager {
         }
         c.me = r.me;
         c.policy = r.policy;
-        c.title = this.title(c.key, r.title_enc);
+        {
+          const m = this.meta(c.key, r.title_enc);
+          c.title = m.title;
+          c.avatar = m.avatar;
+        }
         for (const e of r.entries) {
           await this.ingest(c, e);
           c.cursor = e.seq;

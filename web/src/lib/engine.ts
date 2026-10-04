@@ -44,6 +44,11 @@ export function decodeCard(text: string): ContactCard {
 
 type Listener = () => void;
 
+/** Nur kleine Bilder (data-URL) zulassen. */
+export function validAvatar(a: string | null | undefined): string | null {
+  return typeof a === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(a) && a.length <= 16 * 1024 ? a : null;
+}
+
 export interface AdminUser {
   name: string; admin: boolean; created_at: number; devices: number; blob_bytes: number; channels: number;
   banned_until: number; ban_reason: string; rate_limit: number; rate_until: number;
@@ -724,6 +729,18 @@ export class Engine {
       case 'group_name':
         if (conv.kind === 'group') conv.title = c.name.slice(0, 80);
         break;
+      case 'group_avatar':
+        if (conv.kind === 'group') conv.avatar = validAvatar(c.avatar) ?? undefined;
+        break;
+      case 'profile': {
+        // nur das eigene Profilbild des (MLS-authentifizierten) Absenders
+        const av = validAvatar(c.avatar);
+        const st = this.state!;
+        st.avatars ??= {};
+        if (av) st.avatars[sender] = av;
+        else delete st.avatars[sender];
+        break;
+      }
       case 'directory':
         for (const e of c.entries) {
           const key = `${e.address}#${e.device}`;
@@ -864,6 +881,42 @@ export class Engine {
     const gid = unhex(conv.id);
     const ct = this.client!.encryptEnvelope(gid, JSON.stringify(env));
     await this.sendCt(conv, gid, KIND_MLS, ct, only);
+    // Bilder gleich mitgeben (Profilbild, Gruppenbild), damit neue Kontakte sie sofort sehen.
+    const extraContent: Content[] = [];
+    if (s.me.avatar) extraContent.push({ kind: 'profile', avatar: s.me.avatar });
+    if (conv.kind === 'group' && conv.avatar) extraContent.push({ kind: 'group_avatar', avatar: conv.avatar });
+    for (const c of extraContent) await this.sendCt(conv, gid, KIND_MLS, this.client!.encryptEnvelope(gid, JSON.stringify(this.newEnvelope(c))), only);
+  }
+
+  /** Eigenes Profilbild setzen (data-URL, null = entfernen): wird allen aktiven Chats mitgeteilt und mit den eigenen Geräten synchronisiert. */
+  async setMyAvatar(avatar: string | null): Promise<void> {
+    const s = this.state!;
+    const av = avatar ? validAvatar(avatar) : null;
+    if (avatar && !av) throw new Error('Bild ungültig oder zu groß.');
+    s.me.avatar = av ?? undefined;
+    this.dirty();
+    for (const conv of Object.values(s.conversations)) {
+      if (conv.status === 'active') await this.broadcast(conv, this.newEnvelope({ kind: 'profile', avatar: av })).catch((x) => console.warn('profile', x));
+    }
+  }
+
+  /** Gruppenbild setzen (alle Mitglieder erhalten es). */
+  async setGroupAvatar(id: string, avatar: string | null): Promise<void> {
+    const conv = this.state!.conversations[id];
+    if (!conv || conv.kind !== 'group' || conv.status !== 'active') throw new Error('Nur aktive Gruppen haben ein Bild.');
+    const av = avatar ? validAvatar(avatar) : null;
+    if (avatar && !av) throw new Error('Bild ungültig oder zu groß.');
+    conv.avatar = av ?? undefined;
+    await this.broadcast(conv, this.newEnvelope({ kind: 'group_avatar', avatar: av }));
+    this.dirty();
+  }
+
+  /** Bild zu einem Chat: Gruppenbild bzw. Profilbild des Gegenübers (1:1). */
+  avatarOfConv(conv: Conversation): string | undefined {
+    const s = this.state!;
+    if (conv.kind === 'group') return conv.avatar;
+    const other = conv.members.find((m) => m.address !== s.me.address)?.address;
+    return other ? s.avatars?.[other] : undefined;
   }
 
   // ---------- Öffentliche Aktionen ----------

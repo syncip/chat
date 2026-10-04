@@ -5,7 +5,7 @@ import { formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
 import { MessageView } from './Message';
 import { Dialog } from './Dialog';
-import { Avatar } from './Avatar';
+import { Avatar, AvatarPicker } from './Avatar';
 import { FilesDialog } from './Files';
 import { convSecurity } from '../lib/security';
 
@@ -141,7 +141,7 @@ function ChatHeader({ conv, onBack, onInfo, onFiles }: { conv: Conversation; onB
   return (
     <header className="chat-header">
       <button className="back" onClick={onBack} aria-label="Zurück">←</button>
-      <Avatar name={conv.title} size={40} />
+      <Avatar name={conv.title} size={40} src={e.avatarOfConv(conv)} />
       <div className="grow"><strong>{conv.title}</strong>
         <div className="muted small">{conv.kind === 'group' ? `${memberAddresses(conv).length} Mitglieder` : 'Ende-zu-Ende-verschlüsselt'}{conv.disappearSeconds ? ` · ⏱ ${fmtDur(conv.disappearSeconds)}` : ''}</div>
       </div>
@@ -203,6 +203,7 @@ function ConvInfo({ conv, onClose, onGone }: { conv: Conversation; onClose: () =
         </div>
       )}
       <h3>Einstellungen</h3>
+      {conv.kind === 'group' && <AvatarPicker name={conv.title} src={conv.avatar} label="Gruppenbild wählen" onError={setErr} onPick={(d) => run(() => e.setGroupAvatar(conv.id, d))} />}
       {conv.kind === 'group' && <label>Gruppenname<input value={name} maxLength={80} onChange={(x) => { setName(x.target.value); setSaved(false); }} /></label>}
       <label>Verschwindende Nachrichten
         <select value={timer} onChange={(x) => { setTimer(Number(x.target.value)); setSaved(false); }}>

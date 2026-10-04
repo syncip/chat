@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { DeviceInfo } from '../lib/types';
 import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
+import { AvatarPicker } from './Avatar';
 import { QrCode } from './QrCode';
 import { enrollPasskey, hasPasskey, passkeySupported, removePasskey } from '../lib/passkey';
 import { minPassLength, setMinPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, idleLockMinutes, setIdleLockMinutes, type RememberMode } from '../lib/prefs';
@@ -49,6 +50,9 @@ export function Settings({ onClose }: { onClose: () => void }) {
   return (
     <Dialog title="Einstellungen" onClose={onClose} wide>
       <section>
+        <h3>Profilbild</h3>
+        <p className="muted small">Dein Bild sehen deine Chat-Partner (Ende-zu-Ende-verschlüsselt mitgeteilt) und deine anderen Geräte. Es wird klein gerechnet (128 px).</p>
+        <AvatarPicker name={s.me.address} src={s.me.avatar} label="Profilbild wählen" onError={(m) => setMsg(m)} onPick={(d) => run(() => e.setMyAvatar(d), d ? 'Profilbild gesetzt.' : 'Profilbild entfernt.')} />
         <h3>Anmeldung &amp; Sperre (nur hier)</h3>
         <label>Angemeldet bleiben nach Neuladen
           <select value={remember} onChange={(x) => { const m = x.target.value as RememberMode; setRemember(m); setRememberMode(m); if (m === 'off') void clearSession(); else setMsg('Gilt ab der nächsten Anmeldung.'); }}>

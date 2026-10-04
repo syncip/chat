@@ -166,3 +166,7 @@ code { background: color-mix(in srgb, var(--text) 8%, transparent); padding: 0 4
 
 .qr { width: min(280px, 70vw); margin: 8px 0; background: #fff; border-radius: 8px; padding: 4px; }
 .qr svg { display: block; width: 100%; height: auto; }
+
+.avatar-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+img.avatar { display: inline-block; }
+img.avatar.square { border-radius: 28%; }

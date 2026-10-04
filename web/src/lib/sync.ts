@@ -46,6 +46,7 @@ export function collect(s: AppState): Record<string, unknown> {
   out['set:sendDelivered'] = s.sendDelivered;
   out['set:sendRead'] = s.sendRead;
   out['set:onceDropOwnCopy'] = s.onceDropOwnCopy;
+  if (s.me.avatar) out['set:avatar'] = s.me.avatar;
   for (const a of s.blockedUsers) out[`blockU:${a}`] = true;
   for (const a of s.blockedServers) out[`blockS:${a}`] = true;
   for (const a of s.allowUsers) out[`allowU:${a}`] = true;
@@ -155,7 +156,8 @@ export class AccountSync {
         this.h.applyChannel(name, on ? (it.val as { server: string; key: string; title: string; createdAt: number }) : null);
         break;
       case 'set':
-        if (on) (s as unknown as Record<string, unknown>)[name] = it.val;
+        if (name === 'avatar') s.me.avatar = on && typeof it.val === 'string' ? it.val : undefined;
+        else if (on) (s as unknown as Record<string, unknown>)[name] = it.val;
         break;
       case 'blockU': list(s.blockedUsers); break;
       case 'blockS': list(s.blockedServers); break;

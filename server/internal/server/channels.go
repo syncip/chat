@@ -343,6 +343,9 @@ func (p chanPolicyIn) policy() store.ChannelPolicy {
 }
 
 // createChannel: nur Konten dieses Servers (Geräte-Signatur) dürfen Kanäle anlegen; Besitzer ist ihr AIK.
+// maxTitleEnc: Titel (ggf. mit kleinem Kanalbild als JSON) in Bytes.
+const maxTitleEnc = 24 << 10
+
 func (s *Server) createChannel(w http.ResponseWriter, r *http.Request, u *store.User) {
 	if !s.conf().Channels {
 		writeErr(w, 404, "channels disabled")
@@ -352,11 +355,11 @@ func (s *Server) createChannel(w http.ResponseWriter, r *http.Request, u *store.
 		TitleEnc string       `json:"title_enc"`
 		Policy   chanPolicyIn `json:"policy"`
 	}
-	if !readJSON(w, r, 16<<10, &in) {
+	if !readJSON(w, r, 64<<10, &in) {
 		return
 	}
 	title, err := b64.DecodeString(in.TitleEnc)
-	if err != nil || len(title) == 0 || len(title) > 4096 || !in.Policy.policy().Valid() {
+	if err != nil || len(title) == 0 || len(title) > maxTitleEnc || !in.Policy.policy().Valid() {
 		writeErr(w, 400, "invalid channel")
 		return
 	}
@@ -707,7 +710,7 @@ func (s *Server) channelSettings(w http.ResponseWriter, r *http.Request, ch *sto
 	}
 	var title []byte
 	if in.TitleEnc != "" {
-		if title, err = b64.DecodeString(in.TitleEnc); err != nil || len(title) > 4096 {
+		if title, err = b64.DecodeString(in.TitleEnc); err != nil || len(title) > maxTitleEnc {
 			writeErr(w, 400, "invalid title")
 			return
 		}

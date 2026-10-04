@@ -117,7 +117,7 @@ export function Main() {
         <div className="convs">
           {chans.map((c) => (
             <button key={c.id} className={`conv ${c.id === activeChan ? 'active' : ''}`} onClick={() => { setActive(null); setActiveChan(c.id); e.channels.markRead(c.id); }}>
-              <Avatar name={c.title} channel />
+              <Avatar name={c.title} channel src={c.avatar} />
               <span className="conv-main">
                 <span className="title">📢 {c.title}</span>
                 <span className="preview muted small">{c.me.status === 'pending' ? 'Wartet auf Freigabe' : c.me.status === 'banned' ? 'Gesperrt' : 'Öffentlicher Kanal'}</span>
@@ -128,7 +128,7 @@ export function Main() {
           {list.length === 0 && chans.length === 0 && <p className="muted pad">Noch keine Chats. Teile deinen Kontaktlink (⚙) oder öffne den Link eines Kontakts (＋).</p>}
           {list.map((c) => (
             <button key={c.id} className={`conv ${c.id === active ? 'active' : ''}`} onClick={() => { setActiveChan(null); setActive(c.id); e.markRead(c.id); }}>
-              <Avatar name={c.title} />
+              <Avatar name={c.title} src={e.avatarOfConv(c)} />
               <span className="conv-main">
                 <span className="title">{c.kind === 'group' ? '👥 ' : ''}{c.title}</span>
                 <span className="preview muted small">{preview(c)}</span>

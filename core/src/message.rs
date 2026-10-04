@@ -86,6 +86,14 @@ pub enum Content {
     GroupName {
         name: String,
     },
+    /// Gruppenbild (data-URL, klein; `null` = entfernt).
+    GroupAvatar {
+        avatar: Option<String>,
+    },
+    /// Eigenes Profilbild des Absenders (data-URL, klein; `null` = entfernt).
+    Profile {
+        avatar: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

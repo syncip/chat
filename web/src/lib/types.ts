@@ -38,7 +38,9 @@ export type Content =
   | { kind: 'receipt'; receipt: 'delivered' | 'read'; references: string[] }
   | { kind: 'disappear'; seconds: number }
   | { kind: 'directory'; entries: CapEntry[] }
-  | { kind: 'group_name'; name: string };
+  | { kind: 'group_name'; name: string }
+  | { kind: 'group_avatar'; avatar: string | null }
+  | { kind: 'profile'; avatar: string | null };
 
 export interface Envelope {
   v: 1;
@@ -69,6 +71,8 @@ export interface Conversation {
   id: string; // hex der MLS-Gruppen-ID
   kind: 'dm' | 'group';
   title: string;
+  /** Gruppenbild (data-URL), von Mitgliedern gesetzt. */
+  avatar?: string;
   status: 'active' | 'request' | 'left';
   /** Ein Eintrag je Gerät (MLS-Blatt); `ik` = Konto-Schlüssel (AIK). */
   members: { address: string; ik: string; device: string }[];
@@ -94,7 +98,9 @@ export type FilterMode = 'off' | 'block' | 'allow';
 
 export interface AppState {
   v: 1;
-  me: { address: string; domain: string; name: string; deviceId: string; inboxId: string };
+  me: { address: string; domain: string; name: string; deviceId: string; inboxId: string; avatar?: string };
+  /** Profilbilder anderer Konten (Adresse → Bild als data-URL), per Chat empfangen. */
+  avatars?: Record<string, string>;
   /** Backup-Datei wurde gespeichert (Pflicht nach der Registrierung). */
   backupDone: boolean;
   intro: { mailbox_id: string; send_token: string; key: string } | null;
@@ -174,6 +180,8 @@ export interface ChannelState {
   /** Kanalschlüssel (base64); nur im Link und lokal. */
   key: string;
   title: string;
+  /** Kanalbild (data-URL), Teil des verschlüsselten Titels. */
+  avatar?: string;
   policy: ChannelPolicy;
   me: ChannelMember;
   posts: ChPost[];

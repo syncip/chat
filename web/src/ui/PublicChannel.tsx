@@ -3,6 +3,7 @@ import type { Part } from '../lib/types';
 import { baseUrl, dec, unb64 } from '../lib/util';
 import { Parts } from './Message';
 import { Avatar } from './Avatar';
+import { splitTitle } from '../lib/channels';
 
 interface Entry {
   seq: number;
@@ -43,6 +44,7 @@ export function parsePublicLink(hash: string): { s: string; c: string } | null {
 /** Öffentlicher Kanal ohne Konto: liest den unverschlüsselten Kanal und folgt neuen Beiträgen live (Server-Sent Events). */
 export function PublicChannelView({ link, onClose }: { link: { s: string; c: string }; onClose: () => void }) {
   const [title, setTitle] = useState('');
+  const [avatar, setAvatar] = useState<string | undefined>();
   const [posts, setPosts] = useState<Post[]>([]);
   const [err, setErr] = useState('');
   const [live, setLive] = useState(false);
@@ -76,7 +78,9 @@ export function PublicChannelView({ link, onClose }: { link: { s: string; c: str
         if (!r.ok) throw new Error(r.status === 404 ? 'Kanal nicht gefunden oder nicht öffentlich.' : `Fehler ${r.status}`);
         const j = (await r.json()) as { title: string; entries: Entry[] };
         if (stop) return;
-        setTitle(j.title);
+        const m = splitTitle(j.title);
+        setTitle(m.title);
+        setAvatar(m.avatar);
         j.entries.forEach(add);
         const last = j.entries.at(-1)?.seq ?? 0;
         es = new EventSource(`${base}/public/events?after=${last}`);
@@ -99,7 +103,7 @@ export function PublicChannelView({ link, onClose }: { link: { s: string; c: str
       </div>
       <div className="pubview">
         <header className="chat-header">
-          <Avatar name={title || link.c} size={40} channel />
+          <Avatar name={title || link.c} size={40} channel src={avatar} />
           <div className="grow"><strong>📢 {title || 'Kanal'}</strong><div className="muted small">{link.s} · {live ? '● live' : '○ nicht verbunden'} · du liest ohne Konto mit</div></div>
           <button onClick={() => { history.replaceState(null, '', location.pathname); onClose(); }}>Zur Chat-App</button>
         </header>

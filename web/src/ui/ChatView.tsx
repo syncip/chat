@@ -81,7 +81,13 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
   return (
     <div className="chat">
       <ChatHeader conv={conv} onBack={onBack} onInfo={() => setInfo(true)} onFiles={() => setFilesOpen(true)} />
-      {conv.warning && <div className="banner warn">⚠ {conv.warning}</div>}
+      {conv.warning && (
+        <div className="banner warn" role="alert">
+          <span className="grow">⚠ {conv.warning}</span>
+          <button className="link" onClick={() => setInfo(true)}>Prüfen</button>
+          <button className="bar-close" aria-label="Warnung ausblenden" title="Ausblenden (bis zur nächsten Änderung)" onClick={() => e.dismissConvWarning(conv.id)}>✕</button>
+        </div>
+      )}
       <div className="messages">
         {conv.messages.map((m) => (
           <MessageView

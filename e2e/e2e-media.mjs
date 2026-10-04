@@ -103,8 +103,14 @@ try {
   // Neues Gerät → Hinweis auf dem ersten Gerät
   await linkDevice(alice2, P, aliceBackup);
   await alice.locator('.alert-bar', { hasText: /Neues Gerät/ }).waitFor({ timeout: 30000 });
+  const lay = await alice.locator('.layout').boundingBox();
+  assert.ok(lay.height > 400, 'Layout darf durch Warnbalken nicht zusammenfallen');
+  assert.ok(lay.width > 1000, 'volle Seitenbreite');
   await alice.locator('.alert-bar').getByRole('button', { name: 'Ansehen' }).click();
   await alice.getByRole('dialog', { name: 'Sicherheit' }).getByRole('alert').getByText(/Neues Gerät/).waitFor();
+  await alice.keyboard.press('Escape');
+  await alice.locator('.alert-bar').getByRole('button', { name: 'Hinweis schließen' }).click();
+  await alice.locator('.alert-bar').waitFor({ state: 'detached' });
   console.log('✔ Warnung bei neu hinzugefügtem Gerät');
   console.log('MEDIA-E2E BESTANDEN');
 } catch (e) {

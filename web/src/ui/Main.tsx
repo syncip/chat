@@ -21,6 +21,8 @@ export function Main() {
   const [active, setActive] = useState<string | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [toast, setToast] = useState('');
+  const [, force] = useState(0);
+  const [httpDismissed, setHttpDismissed] = useState(() => { try { return sessionStorage.getItem('httpWarn') === '1'; } catch { return false; } });
   const [pending, setPending] = useState<string | null>(null);
   const [activeChan, setActiveChan] = useState<string | null>(null);
   const [joinLink, setJoinLink] = useState<string | null>(null);
@@ -53,19 +55,22 @@ export function Main() {
   const currentChan = activeChan ? s.channels?.[activeChan] : undefined;
 
   return (
-    <div className={`layout ${current || currentChan ? 'chat-open' : ''} ${isInsecureTransport() || alerts.length ? 'with-warning' : ''}`}>
-      {isInsecureTransport() && (
+    <div className="app">
+      {isInsecureTransport() && !httpDismissed && (
         <div className="transport-warning" role="alert">
-          ⚠ Unverschlüsselte Verbindung (http, kein TLS): Nachrichten bleiben Ende-zu-Ende verschlüsselt, aber ein Angreifer im Netzwerk
-          kann die App selbst manipulieren und Schlüssel abgreifen. Nur in vertrauenswürdigen Netzen (LAN/VPN) nutzen.
+          <span className="grow">⚠ Unverschlüsselte Verbindung (http, kein TLS): Nachrichten bleiben Ende-zu-Ende verschlüsselt, aber ein Angreifer im Netzwerk
+          kann die App selbst manipulieren und Schlüssel abgreifen. Nur in vertrauenswürdigen Netzen (LAN/VPN) nutzen.</span>
+          <button className="bar-close" aria-label="Hinweis schließen" title="Schließen" onClick={() => { setHttpDismissed(true); try { sessionStorage.setItem('httpWarn', '1'); } catch { /* egal */ } }}>✕</button>
         </div>
       )}
       {alerts.length > 0 && (
         <div className="alert-bar" role="alert">
           <span className="grow">⚠ Sicherheitshinweis: {alerts[0].text}{alerts.length > 1 ? ` (+${alerts.length - 1} weitere)` : ''}</span>
           <button onClick={() => setPanel('security')}>Ansehen</button>
+          <button className="bar-close" aria-label="Hinweis schließen" title="Als gesehen markieren und schließen" onClick={() => alerts.forEach((a) => e.dismissAlert(a.id))}>✕</button>
         </div>
       )}
+    <div className={`layout ${current || currentChan ? 'chat-open' : ''}`}>
       <aside className="sidebar">
         <header>
           <div>
@@ -128,6 +133,7 @@ export function Main() {
           <div className="center muted">Wähle einen Chat oder starte einen neuen.</div>
         )}
       </main>
+    </div>
       {!s.backupDone && <BackupGate />}
       {panel === 'files' && <FilesDialog onClose={() => setPanel(null)} />}
       {panel === 'security' && <SecurityDialog onClose={() => setPanel(null)} />}
@@ -144,8 +150,8 @@ export function Main() {
           <PendingCard link={pending} onDone={(id) => { setPending(null); if (id) setActive(id); }} onError={setToast} />
         </Dialog>
       )}
-      {toast && <div className="toast" role="status" onClick={() => setToast('')}>{toast}</div>}
-      {e.notice && <div className="toast" role="status" onClick={() => { e.notice = ''; }}>{e.notice}</div>}
+      {toast && <div className="toast" role="status"><span>{toast}</span><button className="bar-close" aria-label="Meldung schließen" onClick={() => setToast('')}>✕</button></div>}
+      {e.notice && <div className="toast" role="status"><span>{e.notice}</span><button className="bar-close" aria-label="Meldung schließen" onClick={() => { e.notice = ''; force((n) => n + 1); }}>✕</button></div>}
     </div>
   );
 }

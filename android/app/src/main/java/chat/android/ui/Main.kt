@@ -111,8 +111,14 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
             val list = convs.filter { it.status != "request" }
             LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                 if (s.alerts.isNotEmpty()) item {
-                    androidx.compose.material3.Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth().clickable { dialog = "security" }) {
-                        Text("⚠ Sicherheitshinweis: ${s.alerts[0].text}" + (if (s.alerts.size > 1) " (+${s.alerts.size - 1} weitere)" else ""), Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                    androidx.compose.material3.Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "⚠ Sicherheitshinweis: ${s.alerts[0].text}" + (if (s.alerts.size > 1) " (+${s.alerts.size - 1} weitere)" else ""),
+                                Modifier.weight(1f).clickable { dialog = "security" }.padding(vertical = 10.dp), style = MaterialTheme.typography.bodySmall,
+                            )
+                            TextButton(onClick = { val ids = s.alerts.map { it.id }; vm.run { ids.forEach { vm.engine.dismissAlert(it) } } }) { Text("✕") }
+                        }
                     }
                 }
                 if (requests.isNotEmpty()) {

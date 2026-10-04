@@ -151,6 +151,7 @@ export class Engine {
     this.client = client;
     this.info = info;
     const st = this.emptyState({ address: `${name}@${domain}`, domain, name, deviceId: reg.deviceId, inboxId: reg.inboxId });
+    st.knownDevices = [reg.deviceId]; // jedes später hinzukommende Gerät löst einen Hinweis aus
     st.intro = { mailbox_id: res.intro.mailbox_id, send_token: res.intro.send_token, key: introKey };
     st.mailboxes = { [res.intro.mailbox_id]: introKey, [reg.inboxId]: reg.inboxKey };
     this.state = st;
@@ -1185,6 +1186,12 @@ export class Engine {
     return r;
   }
 
+  dismissConvWarning(id: string): void {
+    const c = this.state!.conversations[id];
+    if (c) delete c.warning;
+    this.dirty();
+  }
+
   dismissAlert(id: string): void {
     const s = this.state!;
     s.alerts = (s.alerts ?? []).filter((a) => a.id !== id);
@@ -1196,7 +1203,7 @@ export class Engine {
     s.alerts ??= [];
     if (s.alerts.some((x) => x.id === a.id)) return;
     s.alerts.push({ ...a, ts: Date.now() });
-    this.notice = a.text;
+    this.dirty();
   }
 
   /** Erkennt Geräte, die seit dem letzten Abgleich neu zum Konto hinzugekommen sind. */

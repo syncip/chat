@@ -164,6 +164,7 @@ class Engine(
             intro = IntroBox(mb, intro["send_token"]!!.jsonPrimitive.content, introKey),
             mailboxes = mutableMapOf(mb to introKey, reg.inboxId to reg.inboxKey),
         )
+        state!!.knownDevices = mutableListOf(reg.deviceId) // jedes später hinzukommende Gerät löst einen Hinweis aus
         vault = VaultSession.create(passphrase)
         persist()
         store.write("meta", "$name@$domain".toByteArray())

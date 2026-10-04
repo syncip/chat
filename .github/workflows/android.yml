@@ -135,7 +135,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: android
           script: |
-            ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.chatServer=10.0.2.2:18200 -Pandroid.testInstrumentationRunnerArguments.chatAdminKey=emulator-admin-key || (adb logcat -d | grep -iE "chat|AndroidRuntime|okhttp" | tail -n 300; exit 1)
+            ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.chatServer=10.0.2.2:18200 -Pandroid.testInstrumentationRunnerArguments.chatAdminKey=emulator-admin-key || (adb logcat -d > /tmp/logcat.txt; grep -E "AppFlowTest|TestRunner|System.err|E chat|AndroidRuntime" /tmp/logcat.txt | grep -v THREAD_STATE | head -n 400; exit 1)
             python3 scripts/release_smoke.py app/build/outputs/apk/release/app-release.apk
       - name: Server-Log und Test-Berichte
         if: always()

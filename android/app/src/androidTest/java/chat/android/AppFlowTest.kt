@@ -87,6 +87,7 @@ class AppFlowTest {
         try { flow() } catch (e: Throwable) {
             // Bei Fehlern den sichtbaren UI-Baum mitliefern, damit man im CI-Log sieht, wo die App steht.
             val tree = runCatching { compose.onAllNodes(isRoot()).printToString(maxDepth = 30) }.getOrElse { "(kein UI-Baum: ${it.message})" }
+            android.util.Log.e("AppFlowTest", "FEHLER: ${e.message}\n--- UI ---\n$tree", e)
             throw AssertionError("${e.message}\n--- UI ---\n$tree", e)
         }
     }

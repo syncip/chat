@@ -107,6 +107,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation) {
     var selected by remember { mutableStateOf<Msg?>(null) }
     var menu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val uiScope = androidx.compose.runtime.rememberCoroutineScope()
     val me = s.me.address
     val self = vm.engine.isSelfChat(s, conv)
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { files = files + it }
@@ -143,7 +144,8 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation) {
             }
             text = ""; files = emptyList(); reply = null; codeMode = false; once = false
             busy = false
-            listState.animateScrollToItem(0)
+            // Animationen brauchen den Frame-Takt der Oberfläche: im Composition-Scope starten, nicht im ViewModel-Scope.
+            uiScope.launch { listState.animateScrollToItem(0) }
         }
     }
 

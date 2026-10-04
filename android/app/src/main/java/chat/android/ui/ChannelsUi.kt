@@ -1,5 +1,6 @@
 package chat.android.ui
 
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
@@ -248,6 +249,7 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState) {
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { files = files + it }
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { files = files + it }
     val listState = rememberLazyListState()
+    val uiScope = androidx.compose.runtime.rememberCoroutineScope()
     val isMod = ch.me.status == "active" && (ch.me.role == "owner" || ch.me.role == "mod")
     val me = s.me.address
     val posts = remember(ch.posts) { ch.posts.asReversed() }
@@ -273,7 +275,8 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState) {
             val atts = readAttachments(ctx, files, vm.engine.info?.limits?.max_file_size ?: Long.MAX_VALUE)
             vm.engine.postToChannel(ch.id, if (codeMode) null else text, if (codeMode) lang to text else null, atts)
             text = ""; files = emptyList(); codeMode = false; busy = false
-            listState.animateScrollToItem(0)
+            // Animationen brauchen den Frame-Takt der Oberfläche: im Composition-Scope starten, nicht im ViewModel-Scope.
+            uiScope.launch { listState.animateScrollToItem(0) }
         }
     }
 

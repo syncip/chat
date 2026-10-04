@@ -68,6 +68,14 @@ class AppFlowTest {
     private fun type(tag: String, text: String) { waitTag(tag); scrollTo(tag); compose.onNodeWithTag(tag).performTextInput(text) }
     private fun click(tag: String) { waitTag(tag); scrollTo(tag); compose.onNodeWithTag(tag).performClick() }
 
+    /** Keine Fehlermeldung der App (z. B. „MonotonicFrameClock …“ nach dem Senden). */
+    private fun noError(step: String) {
+        compose.waitForIdle()
+        val vm = androidx.lifecycle.ViewModelProvider(compose.activity)[chat.android.ui.AppViewModel::class.java]
+        val e = vm.error.value
+        if (e != null) throw AssertionError("Fehlermeldung nach „$step“: $e")
+    }
+
     private fun until(what: String, ms: Long = 60_000, cond: () -> Boolean) {
         val end = System.currentTimeMillis() + ms
         while (System.currentTimeMillis() < end) { if (cond()) return; Thread.sleep(300) }
@@ -105,6 +113,7 @@ class AppFlowTest {
         type("qu_pin2", "2468")
         click("qu_pin_save")
         waitText("App-PIN gespeichert")
+        noError("PIN speichern")
         // zurück: Unterseite → Einstellungen → Übersicht
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         compose.waitForIdle()
@@ -114,6 +123,7 @@ class AppFlowTest {
         // 3. Sperren-Knopf und Entsperren per PIN
         click("btn_lock")
         waitTag("pin_key_2")
+        noError("Sperren")
         for (k in "2468") click("pin_key_$k")
         click("pin_key_k")
         waitTag("fab_add", 60_000)
@@ -145,6 +155,8 @@ class AppFlowTest {
         waitText("Hallo Alice", 60_000)
         type("composer_input", "Hallo Bob")
         click("composer_send")
+        Thread.sleep(1500)
+        noError("Nachricht senden")
         until("Antwort kommt bei Bob an") {
             runBlocking { bob.snapshot() }!!.conversations[convId]!!.messages.any { m -> m.parts.any { it is Part.Text && it.body == "Hallo Bob" } }
         }

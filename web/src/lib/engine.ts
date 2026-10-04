@@ -8,6 +8,7 @@ import { AccountSync } from './sync';
 import { clearSession } from './session';
 import { playNotify } from './sound';
 import { loadCore, type Client, type Core, type Vault } from './core';
+import { removePasskey } from './passkey';
 import { kv } from './db';
 import type {
   AppState, Cap, CapEntry, SecurityAlert, Conversation, Content, Contact, DeviceInfo, Envelope, FilterMode, Msg, Part, ServerInfo,
@@ -180,6 +181,7 @@ export class Engine {
     st.mailboxes = { [res.intro.mailbox_id]: introKey, [reg.inboxId]: reg.inboxKey };
     this.state = st;
     this.vault = core.Vault.create(opts.passphrase);
+    await removePasskey();
     await this.persist();
     await kv.put('meta', { address: st.me.address });
     this.knownAddress = st.me.address;
@@ -224,10 +226,18 @@ export class Engine {
     this.info = info;
     this.state = st;
     this.vault = core.Vault.create(newPass);
+    await removePasskey();
     await this.persist();
     await kv.put('meta', { address: st.me.address });
     this.knownAddress = st.me.address;
     await this.start();
+  }
+
+  /** Prüft die Passphrase gegen den lokalen Tresor (ohne zu entsperren). */
+  async verifyPassphrase(passphrase: string): Promise<boolean> {
+    const blob = await kv.get<Uint8Array>('vault');
+    if (!blob) return false;
+    try { this.core.Vault.open(passphrase, blob); return true; } catch { return false; }
   }
 
   async unlock(passphrase: string): Promise<void> {
@@ -348,6 +358,7 @@ export class Engine {
   async deleteAccount(): Promise<void> {
     await this.lock();
     await kv.del('vault');
+    await removePasskey();
     await kv.del('meta');
     this.knownAddress = null;
     this.emit();

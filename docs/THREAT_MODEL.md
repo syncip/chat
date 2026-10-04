@@ -58,3 +58,9 @@ Ein bösartiger Server kann Beiträge zurückhalten oder löschen, aber nicht f�
 - Server ist „dumm“: speichert und leitet Blobs weiter, prüft nur Signaturen und Quoten.
 - Keine IP-/Zugriffs-Logs per Default.
 - Vor produktivem Einsatz: externer Krypto- und Sicherheitsreview.
+
+## Konto-Sperre, Limits und Passkeys
+
+- **Admin-Sperre:** Der Admin kann Konten zeitweise oder dauerhaft sperren und ein Anfragelimit pro Minute setzen (zeitlich begrenzt oder unbefristet). Gesperrte Konten verlieren sofort den Zugriff auf Postfächer, Sync, Dateien, Kanalverwaltung und WebSocket. Administratoren sind nicht sperrbar. Da Nachrichten anonym an Postfächer gehen (Sealed Sender), kann der Server sie keinem Konto zuordnen: das Limit gilt für alle authentifizierten Anfragen des Kontos, nicht für „gesendete Nachrichten“.
+- **Passkey (Web):** WebAuthn mit PRF-Erweiterung leitet ein Geheimnis ab, das die Passphrase verschlüsselt lokal ablegt. Wer den Passkey (inkl. Biometrie/PIN) hat, entsperrt diesen Browser; die Passphrase bleibt der Hauptschlüssel. Erfordert https oder localhost (WebAuthn-Vorgabe; mit reiner `http://IP:PORT`-Adresse nicht möglich).
+- **Android:** Entsperren per Fingerabdruck/Geräte-PIN/Muster ist an einen Android-Keystore-Schlüssel gebunden (das geräteeigene Pendant). Echte Credential-Manager-Passkeys benötigen eine Domain mit `assetlinks.json` und passen nicht zum IP:PORT-Betrieb.

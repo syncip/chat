@@ -64,5 +64,5 @@ Die App weist an mehreren Stellen ausdrücklich darauf hin. Schreiben dürfen we
   Für sensible Gruppen die privaten MLS-Gruppen nutzen. Rotation bei Sperren ist für v2 vorgesehen.
 - Kanäle liegen auf dem Server, der sie erstellt hat (der Link nennt ihn); Mitglieder anderer Server treten per Link bei.
 - Der Beitritt offenbart dem Kanal-Server die IP und die Adresse des Nutzers; Tor/VPN empfohlen.
-- Keine Dateianhänge in Kanälen (v1), nur Text/Code.
+- Dateianhänge in Kanälen (Bilder, Audio, Video, beliebige Dateien): Die Datei wird wie im Chat Ende-zu-Ende verschlüsselt auf den Heimserver des Absenders hochgeladen (Blob-Aufbewahrung und Kontingent gelten); der Dateischlüssel steht im (kanalverschlüsselten) Beitrag. In **öffentlichen** Kanälen liegt dieser Schlüssel im Klartext-Beitrag, die Datei ist damit für jeden lesbar. Webhooks können keine Dateien senden (nur Text).
 - Der Besitzer ist ein Konto des Kanal-Servers; verliert er den AIK (Backup!), ist der Kanal nicht mehr verwaltbar.

@@ -164,22 +164,89 @@ private fun AdminSettings(vm: AppViewModel) {
 private fun AdminUsers(vm: AppViewModel) {
     var users by remember { mutableStateOf<JsonArray?>(null) }
     var err by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) { runCatching { users = vm.engine.adminUsers() }.onFailure { err = it.message ?: "Fehler" } }
+    var query by remember { mutableStateOf("") }
+    var target by remember { mutableStateOf<kotlinx.serialization.json.JsonObject?>(null) }
+    fun load() = vm.run(onError = { err = it }) { users = vm.engine.adminUsers(query.trim()) }
+    LaunchedEffect(Unit) { load() }
+    val now = System.currentTimeMillis() / 1000
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(query, { query = it }, label = { Text("Nutzer suchen") }, singleLine = true, modifier = Modifier.weight(1f))
+            Button(onClick = { load() }) { Text("Suchen") }
+        }
         users?.forEach { e ->
             val u = e.jsonObject
             val name = u["name"]!!.jsonPrimitive.content
             val admin = u["admin"]!!.jsonPrimitive.boolean
+            val until = u["banned_until"]?.jsonPrimitive?.longOrNull ?: 0L
+            val rate = u["rate_limit"]?.jsonPrimitive?.longOrNull ?: 0L
+            val rateUntil = u["rate_until"]?.jsonPrimitive?.longOrNull ?: 0L
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(name + if (admin) "  (Admin)" else "", style = MaterialTheme.typography.titleSmall)
                     Text("${u["devices"]?.jsonPrimitive?.content} Geräte · ${formatBytes(u["blob_bytes"]?.jsonPrimitive?.longOrNull ?: 0L)} Dateien · ${u["channels"]?.jsonPrimitive?.content} Kanäle", style = MaterialTheme.typography.bodySmall)
+                    if (until == -1L) Text("Dauerhaft gesperrt", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    else if (until > now) Text("Gesperrt bis " + java.text.DateFormat.getDateTimeInstance().format(java.util.Date(until * 1000)), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (rate > 0 && (rateUntil == 0L || rateUntil > now)) Text("Limit $rate/Min", style = MaterialTheme.typography.bodySmall)
                 }
-                TextButton(onClick = { vm.run(onError = { err = it }) { vm.engine.setAdmin(name, !admin); users = vm.engine.adminUsers() } }) { Text(if (admin) "Admin entziehen" else "Zum Admin machen") }
+                Column {
+                    TextButton(onClick = { vm.run(onError = { err = it }) { vm.engine.setAdmin(name, !admin); users = vm.engine.adminUsers(query.trim()) } }) { Text(if (admin) "Admin entziehen" else "Zum Admin machen") }
+                    if (!admin) TextButton(onClick = { target = u }) { Text("Sperren / Limit …") }
+                }
             }
             HorizontalDivider()
         }
         if (users == null && err.isEmpty()) Text("Lade …")
+        if (users?.isEmpty() == true) Text("Keine Nutzer gefunden.")
         if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
     }
+    target?.let { u -> RestrictDialog(vm, u, onClose = { target = null }, onDone = { target = null; load() }) }
+}
+
+@Composable
+private fun RestrictDialog(vm: AppViewModel, u: kotlinx.serialization.json.JsonObject, onClose: () -> Unit, onDone: () -> Unit) {
+    val name = u["name"]!!.jsonPrimitive.content
+    val now = System.currentTimeMillis() / 1000
+    val until = u["banned_until"]?.jsonPrimitive?.longOrNull ?: 0L
+    var ban by remember { mutableStateOf(if (until == -1L) "perm" else if (until > now) "temp" else "") }
+    var dur by remember { mutableStateOf("1") }
+    var unit by remember { mutableStateOf(60L) }
+    var reason by remember { mutableStateOf(u["ban_reason"]?.jsonPrimitive?.content ?: "") }
+    var rate by remember { mutableStateOf((u["rate_limit"]?.jsonPrimitive?.longOrNull ?: 0L).let { if (it > 0) it.toString() else "" }) }
+    var rdur by remember { mutableStateOf("0") }
+    var runit by remember { mutableStateOf(60L) }
+    var err by remember { mutableStateOf("") }
+    val units = listOf("Minuten" to 1L, "Stunden" to 60L, "Tage" to 1440L)
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("$name: Sperre / Limit") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("" to "Keine", "temp" to "Zeitweise", "perm" to "Dauerhaft").forEach { (v, l) -> FilterChip(selected = ban == v, onClick = { ban = v }, label = { Text(l) }) }
+                }
+                if (ban == "temp") {
+                    OutlinedTextField(dur, { dur = it.filter(Char::isDigit) }, label = { Text("Dauer") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { units.forEach { (l, v) -> FilterChip(selected = unit == v, onClick = { unit = v }, label = { Text(l) }) } }
+                }
+                if (ban != "") OutlinedTextField(reason, { reason = it.take(300) }, label = { Text("Grund (sieht der Nutzer)") })
+                OutlinedTextField(rate, { rate = it.filter(Char::isDigit) }, label = { Text("Limit pro Minute (leer = Standard)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
+                if ((rate.toIntOrNull() ?: 0) > 0) {
+                    OutlinedTextField(rdur, { rdur = it.filter(Char::isDigit) }, label = { Text("Limit-Dauer (0 = unbefristet)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { units.forEach { (l, v) -> FilterChip(selected = runit == v, onClick = { runit = v }, label = { Text(l) }) } }
+                }
+                Text("Eine Sperre beendet sofort jeden Zugriff des Kontos auf diesen Server. Das Limit drosselt alle Anfragen des Kontos.", style = MaterialTheme.typography.bodySmall)
+                if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                vm.run(onError = { err = it }) {
+                    vm.engine.restrictUser(name, ban, (dur.toLongOrNull() ?: 1L) * unit, reason, rate.toIntOrNull() ?: 0, (rdur.toLongOrNull() ?: 0L) * runit)
+                    onDone()
+                }
+            }) { Text("Speichern") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Abbrechen") } },
+    )
 }

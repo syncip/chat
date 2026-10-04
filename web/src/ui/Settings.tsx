@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { DeviceInfo } from '../lib/types';
 import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
+import { enrollPasskey, hasPasskey, passkeySupported, removePasskey } from '../lib/passkey';
 import { minPassLength, setMinPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, idleLockMinutes, setIdleLockMinutes, type RememberMode } from '../lib/prefs';
 import { soundEnabled, setSoundEnabled, playNotify } from '../lib/sound';
 import { clearSession, persistentAvailable } from '../lib/session';
@@ -54,6 +55,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
           </select>
           <span className="muted small">Dafür wird die Passphrase zeitlich begrenzt auf diesem Gerät vorgehalten (verschlüsselt mit einem nicht exportierbaren Browser-Schlüssel). Nur auf eigenen Geräten nutzen.{!persistentAvailable() ? ' Ohne TLS (https) ist nur „Tab“ möglich.' : ''}</span>
         </label>
+        <PasskeySection setMsg={setMsg} />
         <label>Automatisch sperren nach Inaktivität (Minuten, 0 = nie)
           <input type="number" min={0} value={idle} onChange={(x) => { const n = Math.max(0, Number(x.target.value) || 0); setIdle(n); setIdleLockMinutes(n); }} />
         </label>
@@ -181,6 +183,38 @@ function ListEditor({ title, items, value, setValue, onAdd, onRemove, placeholde
         <input value={value} onChange={(x) => setValue(x.target.value)} placeholder={placeholder} autoCapitalize="none" />
         <button disabled={!value.trim()} onClick={() => onAdd(value)}>Hinzufügen</button>
       </div>
+    </div>
+  );
+}
+
+function PasskeySection({ setMsg }: { setMsg: (m: string) => void }) {
+  const e = useEngine();
+  const [has, setHas] = useState(false);
+  const [pass, setPass] = useState('');
+  const [err, setErr] = useState('');
+  const ok = passkeySupported();
+  useEffect(() => { void hasPasskey().then(setHas); }, []);
+  if (!ok) return <p className="muted small">Passkey-Entsperren: braucht https oder localhost und einen Browser mit WebAuthn.</p>;
+  return (
+    <div>
+      <strong>Entsperren mit Passkey</strong>
+      <p className="muted small">Fingerabdruck, Geräte-PIN oder Sicherheitsschlüssel entsperren diesen Browser statt der Passphrase. Die Passphrase bleibt für Backup und neue Geräte nötig. Der Browser muss die WebAuthn-PRF-Erweiterung unterstützen.</p>
+      {has ? (
+        <button onClick={async () => { await removePasskey(); setHas(false); setMsg('Passkey entfernt.'); }}>Passkey entfernen</button>
+      ) : (
+        <div className="row">
+          <input type="password" aria-label="Passphrase für Passkey" placeholder="Aktuelle Passphrase" value={pass} onChange={(x) => setPass(x.target.value)} />
+          <button disabled={!pass} onClick={async () => {
+            setErr('');
+            try {
+              if (!(await e.verifyPassphrase(pass))) throw new Error('Passphrase ist falsch.');
+              await enrollPasskey(pass, e.state?.me.address ?? 'Chat');
+              setPass(''); setHas(true); setMsg('Passkey eingerichtet.');
+            } catch (x) { setErr((x as Error).message); }
+          }}>Passkey einrichten</button>
+        </div>
+      )}
+      {err && <p className="error" role="alert">{err}</p>}
     </div>
   );
 }

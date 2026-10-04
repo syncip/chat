@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { isInsecureTransport } from '../lib/util';
 import { useEngine } from './hooks';
 import { minPassLength, setMinPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, type RememberMode } from '../lib/prefs';
 import { saveSession, persistentAvailable } from '../lib/session';
+import { hasPasskey, passkeyPassphrase, passkeySupported } from '../lib/passkey';
 
 function TransportNote() {
   return isInsecureTransport() ? (
@@ -91,6 +92,22 @@ export function Unlock({ address }: { address: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [remember, setRemember] = useState<RememberMode>(rememberMode());
+  const [pk, setPk] = useState(false);
+  useEffect(() => { if (passkeySupported()) void hasPasskey().then(setPk); }, []);
+  async function withPasskey() {
+    setBusy(true);
+    setErr('');
+    try {
+      const p = await passkeyPassphrase();
+      if (!p) return;
+      await e.unlock(p);
+      await saveSession(p, remember);
+    } catch (x) {
+      setErr((x as Error).message || 'Passkey-Entsperren fehlgeschlagen');
+    } finally {
+      setBusy(false);
+    }
+  }
   async function submit(ev: React.FormEvent) {
     ev.preventDefault();
     setBusy(true);
@@ -118,6 +135,7 @@ export function Unlock({ address }: { address: string }) {
         </label>
         {err && <p className="error" role="alert">{err}</p>}
         <button className="primary" disabled={busy || !pass}>{busy ? 'Entsperre …' : 'Entsperren'}</button>
+        {pk && <button type="button" disabled={busy} onClick={() => void withPasskey()}>🔑 Mit Passkey entsperren</button>}
       </form>
     </div>
   );

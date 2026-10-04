@@ -325,7 +325,17 @@ class Engine(
     suspend fun adminStats(): JsonObject = op { ChatJson.parseToJsonElement(api!!.call("GET", "/v1/admin/stats")).jsonObject }
     suspend fun adminSettings(): JsonObject = op { ChatJson.parseToJsonElement(api!!.call("GET", "/v1/admin/settings")).jsonObject }
     suspend fun saveAdminSettings(s: JsonObject): JsonObject = op { ChatJson.parseToJsonElement(api!!.call("PUT", "/v1/admin/settings", s.toString())).jsonObject }
-    suspend fun adminUsers(): JsonArray = op { ChatJson.parseToJsonElement(api!!.call("GET", "/v1/admin/users")).jsonObject["users"]!!.jsonArray }
+    suspend fun adminUsers(q: String = ""): JsonArray = op {
+        val qs = if (q.isEmpty()) "" else "?q=" + java.net.URLEncoder.encode(q, "UTF-8")
+        ChatJson.parseToJsonElement(api!!.call("GET", "/v1/admin/users$qs")).jsonObject["users"]!!.jsonArray
+    }
+
+    /** ban: "" | "perm" | "temp" (mit banMinutes); rateLimit: Anfragen/Minute (0 = Standard), rateMinutes 0 = unbefristet. */
+    suspend fun restrictUser(name: String, ban: String, banMinutes: Long, reason: String, rateLimit: Int, rateMinutes: Long) = op {
+        api!!.call("PUT", "/v1/admin/users/$name/restrict", buildJsonObject {
+            put("ban", ban); put("ban_minutes", banMinutes); put("reason", reason); put("rate_limit", rateLimit); put("rate_minutes", rateMinutes)
+        }.toString()); Unit
+    }
     suspend fun setAdmin(name: String, admin: Boolean) = op { api!!.call("PUT", "/v1/admin/users/$name/admin", buildJsonObject { put("admin", admin) }.toString()); Unit }
     suspend fun previewChannel(link: String): ChannelPreview = op { channels.preview(link) }
     suspend fun joinChannel(link: String, captchaToken: String? = null, captchaAnswer: String? = null): String = op { channels.join(link, captchaToken, captchaAnswer) }

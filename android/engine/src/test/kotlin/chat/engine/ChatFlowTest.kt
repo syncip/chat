@@ -182,6 +182,7 @@ class ChatFlowTest {
             assertFailsWith<ChatException> { e2.linkDevice(backup.copyOf(backup.size / 2), "backup-passphrase-1", "neue-passphrase-1") }
             e2.linkDevice(backup, "backup-passphrase-1", "neue-passphrase-1")
             val dev2 = Client(e2, java.io.File("."), a, "alice")
+            eventually("Hinweis auf neues Gerät beim ersten Gerät") { alice.state().alerts.firstOrNull { it.kind == "device" } }
             assertEquals(2, e2.listDevices().size)
 
             // Gerät 1 nimmt Gerät 2 automatisch in die Unterhaltung auf; der alte Verlauf bleibt unlesbar

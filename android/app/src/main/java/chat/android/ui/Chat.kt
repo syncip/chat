@@ -68,7 +68,7 @@ private fun formatBytes(n: Long): String {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> Unit) {
+fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> Unit, onFiles: () -> Unit) {
     val ctx = LocalContext.current
     var text by remember { mutableStateOf("") }
     var codeMode by remember { mutableStateOf(false) }
@@ -129,14 +129,18 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
                 title = {
                     Column {
                         Text(conv.title, maxLines = 1)
+                        val sec = convSecurity(s, conv)
                         Text(
-                            if (conv.kind == "group") "${conv.members.size} Mitglieder" else "Ende-zu-Ende-verschlüsselt",
-                            style = MaterialTheme.typography.bodySmall,
+                            (if (conv.kind == "group") "${conv.members.size} Mitglieder" else "Ende-zu-Ende-verschlüsselt") + " · 🔒 ${sec.second}",
+                            style = MaterialTheme.typography.bodySmall, color = levelColor(sec.first),
                         )
                     }
                 },
                 navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
-                actions = { TextButton(onClick = { info = true }) { Text("ⓘ") } },
+                actions = {
+                    TextButton(onClick = onFiles) { Text("📁") }
+                    TextButton(onClick = { info = true }) { Text("ⓘ") }
+                },
             )
         },
         modifier = Modifier.imePadding(),
@@ -313,36 +317,91 @@ private fun CodeBlock(p: Part.Code) {
     }
 }
 
+private val IMAGE_RE = Regex("^image/(png|jpeg|gif|webp)$")
+private val AUDIO_RE = Regex("^audio/(mpeg|mp3|ogg|wav|x-wav|webm|aac|flac|mp4|x-m4a)$")
+private val VIDEO_RE = Regex("^video/(mp4|webm|ogg|quicktime)$")
+private const val AUTO_IMAGE_MAX = 15L * 1024 * 1024
+
+/** Dekodierte Bilder, nur im Arbeitsspeicher (kein Klartext auf dem Datenträger). */
+private object BitmapCache {
+    val cache = android.util.LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(24)
+}
+
+private fun fileIcon(name: String, mime: String): String {
+    val ext = name.substringAfterLast('.', "").lowercase()
+    return when {
+        mime.startsWith("audio/") -> "🎵"
+        mime.startsWith("video/") -> "🎬"
+        ext == "pdf" -> "📕"
+        ext in listOf("doc", "docx", "odt", "rtf", "txt", "md") -> "📄"
+        ext in listOf("xls", "xlsx", "csv", "ods") -> "📊"
+        ext in listOf("zip", "7z", "rar", "tar", "gz") -> "🗜️"
+        ext in listOf("exe", "msi", "apk", "bat", "sh", "dll") -> "⚙️"
+        else -> "📎"
+    }
+}
+
+/** Datei in einer Nachricht: Bilder direkt angezeigt, Audio/Video per Klick abgespielt (nur im Speicher), sonst Datei-Karte. */
 @Composable
-private fun FileCard(vm: AppViewModel, p: Part.File) {
+fun FileCard(vm: AppViewModel, p: Part.File, compact: Boolean = false) {
     val ctx = LocalContext.current
     var busy by remember { mutableStateOf(false) }
-    var preview by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var image by remember { mutableStateOf(BitmapCache.cache.get(p.blob_id)) }
+    var media by remember { mutableStateOf<ByteArray?>(null) }
     var pending by remember { mutableStateOf<ByteArray?>(null) }
+    var zoom by remember { mutableStateOf(false) }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val data = pending
         if (uri != null && data != null) ctx.contentResolver.openOutputStream(uri)?.use { it.write(data) }
         pending = null
     }
-    val isImg = Regex("^image/(png|jpeg|gif|webp)$").matches(p.mime)
+    val isImg = IMAGE_RE.matches(p.mime)
+    val isAudio = AUDIO_RE.matches(p.mime)
+    val isVideo = VIDEO_RE.matches(p.mime)
 
-    fun load(toDisk: Boolean) {
+    fun load(then: (ByteArray) -> Unit) {
         busy = true
         vm.run(onError = { vm.showError(it); busy = false }) {
             val data = vm.engine.downloadFile(p)
-            if (toDisk) { pending = data; save.launch(p.name.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_")) }
-            else preview = BitmapFactory.decodeByteArray(data, 0, data.size)?.asImageBitmap()
+            then(data)
             busy = false
         }
     }
+    fun showImage(data: ByteArray) {
+        BitmapFactory.decodeByteArray(data, 0, data.size)?.asImageBitmap()?.let { BitmapCache.cache.put(p.blob_id, it); image = it }
+    }
+
+    LaunchedEffect(p.blob_id) {
+        if (isImg && image == null && p.size <= AUTO_IMAGE_MAX) load { showImage(it) }
+    }
 
     Column(Modifier.padding(vertical = 4.dp)) {
-        preview?.let { Image(it, contentDescription = p.name, modifier = Modifier.heightIn(max = 280.dp)) }
-        Text("📎 ${p.name}", style = MaterialTheme.typography.bodyMedium)
-        Text("${formatBytes(p.size)} · von ${p.blob_server} · wird nie ausgeführt", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row {
-            if (isImg && preview == null) TextButton(enabled = !busy, onClick = { load(false) }) { Text("Vorschau laden") }
-            TextButton(enabled = !busy, onClick = { load(true) }) { Text(if (busy) "…" else "Speichern") }
+        if (isImg) {
+            val img = image
+            if (img != null) Image(img, contentDescription = p.name, modifier = Modifier.heightIn(max = 300.dp).clickable { zoom = true })
+            else if (busy) Text("Lädt …", style = MaterialTheme.typography.labelMedium)
+            else TextButton(onClick = { load { showImage(it) } }) { Text("Bild laden (${formatBytes(p.size)})") }
+        }
+        if (isAudio || isVideo) {
+            val m = media
+            if (m != null) MediaPlayerView(m, video = isVideo)
+            else OutlinedButton(enabled = !busy, onClick = { load { media = it } }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (busy) "Lädt …" else if (isVideo) "▶ Video abspielen" else "▶ Audio abspielen")
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(fileIcon(p.name, p.mime))
+            Text(p.name, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+            Text(formatBytes(p.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(enabled = !busy, onClick = {
+                load { data -> pending = data; save.launch(p.name.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_")) }
+            }) { Text("Speichern") }
+        }
+        if (!compact) Text("Von ${p.blob_server} geladen und lokal entschlüsselt · wird nie ausgeführt", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (zoom) image?.let { img ->
+        androidx.compose.ui.window.Dialog(onDismissRequest = { zoom = false }) {
+            Image(img, contentDescription = p.name, modifier = Modifier.fillMaxWidth().clickable { zoom = false })
         }
     }
 }

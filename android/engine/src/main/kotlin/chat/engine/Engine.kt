@@ -485,6 +485,7 @@ class Engine(
             if (c == null) s.contacts[m.address] = Contact(m.address, m.ik)
             else if (c.ik != m.ik) {
                 conv.warning = "Der Schlüssel von ${m.address} hat sich geändert. Bitte neu verifizieren."
+                addAlert("key-${m.address}-${m.ik.take(8)}", "key", conv.warning!!)
                 c.verified = false
             }
         }
@@ -969,12 +970,35 @@ class Engine(
      * Abgleich der Geräte des eigenen Kontos mit den Blättern in jeder Gruppe: Das Gerät mit der kleinsten ID unter den bereits
      * beteiligten nimmt neue Geräte auf und entfernt widerrufene (siehe docs/MULTIDEVICE.md).
      */
+    private fun addAlert(id: String, kind: String, text: String) {
+        val s = state ?: return
+        if (s.alerts.any { it.id == id }) return
+        s.alerts.add(SecurityAlert(id, kind, text, clock()))
+    }
+
+    /** Erkennt Geräte, die seit dem letzten Abgleich neu zum Konto hinzugekommen sind. */
+    private fun trackDevices(devs: List<DeviceInfo>) {
+        val s = state ?: return
+        val ids = devs.map { it.id }
+        val known = s.knownDevices
+        if (known == null) { s.knownDevices = ids.toMutableList(); return }
+        for (id in ids) {
+            if (id in known) continue
+            known.add(id)
+            addAlert("dev-$id", "device", "Neues Gerät $id wurde deinem Konto hinzugefügt. Warst du das nicht, widerrufe es sofort (Einstellungen → Geräte).")
+        }
+        known.retainAll(ids.toSet())
+    }
+
+    suspend fun dismissAlert(id: String) = op { state!!.alerts.removeAll { it.id == id }; dirty() }
+
     private suspend fun reconcileDevices() {
         val s = state ?: return
         if (api == null || reconciling) return
         reconciling = true
         try {
             val devs = ChatJson.decodeFromString(kotlinx.serialization.builtins.ListSerializer(DeviceInfo.serializer()), api!!.call("GET", "/v1/devices"))
+            trackDevices(devs)
             val active = devs.map { it.id }.toSet()
             for (conv in s.conversations.values.toList()) {
                 if (conv.status != "active") continue

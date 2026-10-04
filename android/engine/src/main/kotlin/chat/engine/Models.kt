@@ -188,7 +188,13 @@ data class AppState(
     var onceDropOwnCopy: Boolean = false,
     /** Öffentliche Kanäle (Schlüssel stehen auch in der Backup-Datei, damit neue Geräte sie bekommen). */
     val channels: MutableMap<String, ChannelState> = mutableMapOf(),
+    /** Bekannte Geräte des Kontos (zur Erkennung neu hinzugefügter Geräte) und offene Sicherheitshinweise. */
+    var knownDevices: MutableList<String>? = null,
+    val alerts: MutableList<SecurityAlert> = mutableListOf(),
 )
+
+@Serializable
+data class SecurityAlert(val id: String, val kind: String, val text: String, val ts: Long) // kind: device | key
 
 @Serializable
 data class Limits(

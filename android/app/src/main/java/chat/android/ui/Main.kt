@@ -42,6 +42,7 @@ sealed interface Screen {
     data class Chat(val id: String) : Screen
     data class Channel(val id: String) : Screen
     data object Settings : Screen
+    data class Files(val convId: String?) : Screen
 }
 
 @Composable
@@ -80,12 +81,13 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
     when (val sc = screen) {
         is Screen.Chat -> {
             val conv = s.conversations[sc.id]
-            if (conv == null) screen = Screen.List else ChatScreen(vm, s, conv, onBack = { screen = Screen.List })
+            if (conv == null) screen = Screen.List else ChatScreen(vm, s, conv, onBack = { screen = Screen.List }, onFiles = { screen = Screen.Files(conv.id) })
         }
         is Screen.Channel -> {
             val ch = s.channels[sc.id]
             if (ch == null) screen = Screen.List else ChannelScreen(vm, s, ch, onBack = { screen = Screen.List })
         }
+        is Screen.Files -> FilesScreen(vm, s, sc.convId, onBack = { screen = if (sc.convId != null) Screen.Chat(sc.convId) else Screen.List })
         Screen.Settings -> SettingsScreen(vm, activity, s, onBack = { screen = Screen.List }, onSecureChanged = onSecureChanged)
         Screen.List -> Scaffold(
             topBar = {
@@ -96,6 +98,9 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
                         TextButton(onClick = { dialog = "group" }) { Text("👥") }
                         TextButton(onClick = { dialog = "channel" }) { Text("📢") }
                         TextButton(onClick = { dialog = "join" }) { Text("🔗") }
+                        TextButton(onClick = { screen = Screen.Files(null) }) { Text("📁") }
+                        val sec = securityReport(s, online, vm.engine.info?.client_hash).first
+                        TextButton(onClick = { dialog = "security" }) { Text("🛡", color = levelColor(sec)) }
                         TextButton(onClick = { screen = Screen.Settings }) { Text("⚙") }
                     },
                 )
@@ -105,6 +110,11 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
             val requests = convs.filter { it.status == "request" }
             val list = convs.filter { it.status != "request" }
             LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                if (s.alerts.isNotEmpty()) item {
+                    androidx.compose.material3.Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth().clickable { dialog = "security" }) {
+                        Text("⚠ Sicherheitshinweis: ${s.alerts[0].text}" + (if (s.alerts.size > 1) " (+${s.alerts.size - 1} weitere)" else ""), Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 if (requests.isNotEmpty()) {
                     item { Text("Anfragen", Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp), style = MaterialTheme.typography.labelLarge) }
                     items(requests, key = { it.id }) { c -> ConvRow(c, badge = "neu") { screen = Screen.Chat(c.id) } }
@@ -140,6 +150,7 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
         "new" -> StartChatDialog(vm, onClose = { dialog = null }, onStarted = { id -> dialog = null; screen = Screen.Chat(id) })
         "channel" -> CreateChannelDialog(vm, onClose = { dialog = null }, onCreated = { id -> dialog = null; screen = Screen.Channel(id) })
         "join" -> JoinChannelDialog(vm, onClose = { dialog = null }, onJoined = { id -> dialog = null; screen = Screen.Channel(id) })
+        "security" -> SecurityDialog(vm, s, online, onClose = { dialog = null })
         "group" -> NewGroupDialog(vm, s, onClose = { dialog = null }, onCreated = { id -> dialog = null; screen = Screen.Chat(id) })
     }
     LaunchedEffect(Unit) { /* Zustand wird vom ViewModel gehalten */ }

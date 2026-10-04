@@ -465,11 +465,13 @@ class Engine(
             override val deviceId = s.me.deviceId
             override fun sign(data: ByteArray) = c.sign(data)
         }, http)
-        info = runCatching { api!!.serverInfo() }.getOrNull() ?: info
         _phase.value = Phase.Unlocked
         emit()
         pump?.cancel()
         pump = scope.launch(dispatcher) { for (job in incoming) runCatching { job() }.onFailure { System.err.println("queue: $it") } }
+        // Server-Infos (Limits) im Hintergrund holen: ein langsamer oder nicht erreichbarer Server darf das Entsperren nicht aufhalten.
+        val a0 = api
+        scope.launch(dispatcher) { runCatching { a0?.serverInfo() }.getOrNull()?.let { info = it; emit() } }
         connect()
         channels.start()
         tick = scope.launch(dispatcher) {
@@ -526,22 +528,33 @@ class Engine(
         while (true) {
             val arr = ChatJson.parseToJsonElement(a.call("GET", "/v1/messages?after=${s.cursor}&limit=100")).jsonArray
             if (arr.isEmpty()) return
+            // Ein Speichern/Neuzeichnen und ein Löschen beim Server je Stapel statt je Nachricht (nach dem Entsperren oft viele Nachrichten).
+            var last = -1L
             for (e in arr) {
                 val o = e.jsonObject
-                handleRaw(o["seq"]!!.jsonPrimitive.content.toLong(), o["mailbox_id"]!!.jsonPrimitive.content, o["data"]!!.jsonPrimitive.content.unb64())
+                val seq = o["seq"]!!.jsonPrimitive.content.toLong()
+                if (handleRaw(seq, o["mailbox_id"]!!.jsonPrimitive.content, o["data"]!!.jsonPrimitive.content.unb64(), batch = true)) last = seq
+            }
+            if (last >= 0) {
+                flush()
+                emit()
+                runCatching { api?.call("DELETE", "/v1/messages?upto=$last") }
             }
         }
     }
 
-    private suspend fun handleRaw(seq: Long, mailboxId: String, data: ByteArray) {
-        val s = state ?: return
-        if (seq <= s.cursor) return
+    /** Verarbeitet eine Nachricht; mit [batch] bleibt Speichern/Neuzeichnen/Löschen dem Aufrufer überlassen. Liefert true, wenn sie neu war. */
+    private suspend fun handleRaw(seq: Long, mailboxId: String, data: ByteArray, batch: Boolean = false): Boolean {
+        val s = state ?: return false
+        if (seq <= s.cursor) return false
         try { handleIncoming(mailboxId, data) } catch (e: Exception) { System.err.println("message dropped: $e") }
         s.cursor = seq
+        if (batch) return true
         flush()
         emit()
         // Erst nach dem Speichern beim Server löschen.
         runCatching { api?.call("DELETE", "/v1/messages?upto=$seq") }
+        return true
     }
 
     private suspend fun replenishKeyPackages() {

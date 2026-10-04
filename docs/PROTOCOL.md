@@ -199,3 +199,18 @@ Ohne TLS ist der ausgelieferte Web-Client manipulierbar (siehe THREAT_MODEL); de
 ## 12. Öffentliche Kanäle
 
 Siehe [CHANNELS.md](CHANNELS.md): Link-Schlüssel, `Chan-Sig`-Authentifizierung mit dem Konto-Schlüssel, Beitrittsregeln (offen/Freigabe/PoW/Captcha), Rechte, Moderation, WebSocket-Stream.
+
+## 13. Chat-Codes, QR-Anmeldung, Bilder (v0.2)
+
+- **Chat-Code:** `PUT /v1/code {code, card}` (authentifiziert) veröffentlicht die Kontaktkarte des Kontos unter einem frei gewählten Code
+  (`^[a-z0-9][a-z0-9_-]{2,39}$`, eindeutig je Server, ein Code pro Konto). `GET /v1/codes/{code}` (öffentlich) liefert die Karte;
+  `?domain=host` lässt den Home-Server den Code bei einem föderierten Server auflösen (`code@host`). `DELETE /v1/code` entfernt ihn.
+  Gesperrte Konten lösen nicht mehr auf. Wer den Code kennt, kann eine Chat-Anfrage senden (wie beim Kontaktlink).
+- **Kontakt-QR:** der Kontaktlink (`…/#/add/…`) als QR-Code; Android scannt ihn bei „Neuer Chat“.
+- **Geräte-QR (`chatlink1:`):** `POST /v1/transfer` (authentifiziert) legt einen mit einem Einmalschlüssel verschlüsselten Backup-Inhalt ab
+  (≤ 256 KiB, 5 min, einmal abrufbar über `GET /v1/transfer/{id}`, nur im Speicher). Der QR-Code enthält `{s: Server, i: ID, k: Schlüssel}`.
+  Das neue Gerät holt den Blob, entschlüsselt ihn und meldet sich wie mit einer Backup-Datei an (`POST /v1/devices`).
+- **Bilder:** Profilbild (`profile`) und Gruppenbild (`group_avatar`) sind MLS-Anwendungsnachrichten (data-URL, ≤ 16 KiB, JPEG/PNG/WebP);
+  das Profilbild wird mit den eigenen Geräten über den Konto-Sync (`set:avatar`) abgeglichen. Das Kanalbild steckt im verschlüsselten Kanaltitel
+  (`{"t": Titel, "i": data-URL}`; in öffentlichen Kanälen im Klartext) und kann nur vom Besitzer geändert werden.
+- **Kanal-Beiträge löschen:** Autoren dürfen eigene Beiträge löschen, fremde nur die Moderation (Besitzer-/Moderator-Beiträge nur durch höhere Rolle).

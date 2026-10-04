@@ -1,5 +1,6 @@
 package chat.android.ui
 
+import chat.engine.Phase
 import android.app.Application
 import android.net.Uri
 import androidx.compose.runtime.getValue
@@ -70,7 +71,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             engine.phase.collect {
                 _state.value = engine.snapshot()
-                if (it != chat.engine.Phase.Unlocked) home()
+                if (it != Phase.Unlocked) home()
             }
         }
     }

@@ -14,3 +14,4 @@ android/.kotlin/
 *.keystore
 *.jks
 google-services.json
+!android/app/debug-test.keystore

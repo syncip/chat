@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/color"
@@ -129,7 +130,7 @@ func parseChanAuth(h string) map[string]string {
 
 func (s *Server) chanAuth(h chanHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.cfg.Channels {
+		if !s.conf().Channels {
 			writeErr(w, 404, "channels disabled")
 			return
 		}
@@ -138,13 +139,13 @@ func (s *Server) chanAuth(h chanHandler) http.HandlerFunc {
 			writeErr(w, 401, "unauthorized")
 			return
 		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxPostSize)*2+4096))
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(s.conf().MaxPostSize)*2+4096))
 		if err != nil {
 			writeErr(w, 413, "body too large")
 			return
 		}
 		sum := sha256.Sum256(body)
-		ik, ok := s.chanVerify(s.cfg.Domain, r.Method, r.URL.RequestURI(), a, hex.EncodeToString(sum[:]))
+		ik, ok := s.chanVerify(s.conf().Domain, r.Method, r.URL.RequestURI(), a, hex.EncodeToString(sum[:]))
 		if !ok {
 			writeErr(w, 401, "unauthorized")
 			return
@@ -165,7 +166,7 @@ func now() int64 { return time.Now().Unix() }
 func policyJSON(p store.ChannelPolicy) map[string]any {
 	return map[string]any{
 		"join_mode": p.JoinMode, "pow_bits": p.PowBits, "probation_seconds": p.ProbationSeconds,
-		"members_can_write": p.MembersCanWrite, "slow_mode_seconds": p.SlowModeSeconds,
+		"members_can_write": p.MembersCanWrite, "slow_mode_seconds": p.SlowModeSeconds, "public": p.Public,
 	}
 }
 
@@ -179,6 +180,9 @@ func memberJSON(m *store.ChannelMember, p store.ChannelPolicy) map[string]any {
 func entryJSON(e store.LogEntry) map[string]any {
 	m := map[string]any{"seq": e.Seq, "type": e.Type, "ts": e.TS, "address": e.Address, "ik": b64.EncodeToString(e.IK)}
 	if e.Type == "post" {
+		if e.Hook != "" {
+			m["hook"] = e.Hook // vom Server verfasst (Webhook), nicht vom Mitglied signiert
+		}
 		m["post_id"] = e.PostID
 		m["epoch"] = e.Epoch
 		m["deleted"] = e.Deleted
@@ -330,16 +334,17 @@ type chanPolicyIn struct {
 	ProbationSeconds int64  `json:"probation_seconds"`
 	MembersCanWrite  bool   `json:"members_can_write"`
 	SlowModeSeconds  int64  `json:"slow_mode_seconds"`
+	Public           bool   `json:"public"`
 }
 
 func (p chanPolicyIn) policy() store.ChannelPolicy {
 	return store.ChannelPolicy{JoinMode: p.JoinMode, PowBits: p.PowBits, ProbationSeconds: p.ProbationSeconds,
-		MembersCanWrite: p.MembersCanWrite, SlowModeSeconds: p.SlowModeSeconds}
+		MembersCanWrite: p.MembersCanWrite, SlowModeSeconds: p.SlowModeSeconds, Public: p.Public}
 }
 
 // createChannel: nur Konten dieses Servers (Geräte-Signatur) dürfen Kanäle anlegen; Besitzer ist ihr AIK.
 func (s *Server) createChannel(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if !s.cfg.Channels {
+	if !s.conf().Channels {
 		writeErr(w, 404, "channels disabled")
 		return
 	}
@@ -356,7 +361,7 @@ func (s *Server) createChannel(w http.ResponseWriter, r *http.Request, u *store.
 		return
 	}
 	id := randID(10)
-	err = s.st.CreateChannel(store.Channel{ID: id, OwnerUser: u.ID, OwnerIK: u.IK, TitleEnc: title, Policy: in.Policy.policy()}, u.Name+"@"+s.cfg.Domain, s.cfg.MaxChannels)
+	err = s.st.CreateChannel(store.Channel{ID: id, OwnerUser: u.ID, OwnerIK: u.IK, TitleEnc: title, Policy: in.Policy.policy()}, u.Name+"@"+s.conf().Domain, s.conf().MaxChannels)
 	if errors.Is(err, store.ErrLimit) {
 		writeErr(w, 429, "channel limit reached")
 		return
@@ -365,21 +370,25 @@ func (s *Server) createChannel(w http.ResponseWriter, r *http.Request, u *store.
 		writeErr(w, 500, "internal error")
 		return
 	}
-	_, _ = s.st.AppendEvent(id, "created", u.IK, nil, u.Name+"@"+s.cfg.Domain, nil)
+	_, _ = s.st.AppendEvent(id, "created", u.IK, nil, u.Name+"@"+s.conf().Domain, nil)
 	writeJSON(w, 201, map[string]any{"id": id})
 }
 
 func (s *Server) channelInfo(w http.ResponseWriter, r *http.Request) {
 	ch, err := s.st.Channel(r.PathValue("id"))
-	if err != nil || !s.cfg.Channels {
+	if err != nil || !s.conf().Channels {
 		writeErr(w, 404, "not found")
 		return
 	}
 	n, _ := s.st.ChannelMemberCount(ch.ID)
-	writeJSON(w, 200, map[string]any{
+	out := map[string]any{
 		"id": ch.ID, "title_enc": b64.EncodeToString(ch.TitleEnc), "policy": policyJSON(ch.Policy),
 		"owner_ik": b64.EncodeToString(ch.OwnerIK), "members": n, "created_at": ch.CreatedAt,
-	})
+	}
+	if ch.Policy.Public { // öffentliche Kanäle sind unverschlüsselt: der Titel steht im Klartext
+		out["title"] = string(ch.TitleEnc)
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) channelCaptcha(w http.ResponseWriter, r *http.Request) {
@@ -435,7 +444,7 @@ func (s *Server) channelJoin(w http.ResponseWriter, r *http.Request, ch *store.C
 			return
 		}
 	}
-	m, created, err := s.st.JoinChannel(ch.ID, ik, in.Address, status, s.cfg.MaxChannelUsers)
+	m, created, err := s.st.JoinChannel(ch.ID, ik, in.Address, status, s.conf().MaxChannelUsers)
 	switch {
 	case errors.Is(err, store.ErrBanned):
 		writeErr(w, 403, "banned")
@@ -506,7 +515,7 @@ func (s *Server) channelPost(w http.ResponseWriter, r *http.Request, ch *store.C
 	}
 	data, e1 := b64.DecodeString(in.Data)
 	sig, e2 := b64.DecodeString(in.Sig)
-	if e1 != nil || e2 != nil || !postIDRe.MatchString(in.PostID) || len(data) == 0 || len(data) > s.cfg.MaxPostSize {
+	if e1 != nil || e2 != nil || !postIDRe.MatchString(in.PostID) || len(data) == 0 || len(data) > s.conf().MaxPostSize {
 		writeErr(w, 400, "invalid post")
 		return
 	}
@@ -690,6 +699,7 @@ func (s *Server) channelSettings(w http.ResponseWriter, r *http.Request, ch *sto
 		}
 	}
 	p := in.Policy.policy()
+	p.Public = ch.Policy.Public // Öffentlich/Privat lässt sich nachträglich nicht ändern
 	if !p.Valid() {
 		writeErr(w, 400, "invalid policy")
 		return
@@ -728,7 +738,7 @@ func (s *Server) channelDelete(w http.ResponseWriter, r *http.Request, ch *store
 
 // channelStream: WebSocket, meldet neue Log-Einträge ({"type":"log","seq":n}). Erste Nachricht = {ik,ts,nonce,sig} (Body-Hash "WS").
 func (s *Server) channelStream(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.Channels {
+	if !s.conf().Channels {
 		writeErr(w, 404, "channels disabled")
 		return
 	}
@@ -759,7 +769,7 @@ func (s *Server) channelStream(w http.ResponseWriter, r *http.Request) {
 		_ = c.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
-	ik, ok := s.chanVerify(s.cfg.Domain, "GET", r.URL.Path, map[string]string{"ik": a.IK, "ts": a.Ts, "nonce": a.Nonce, "sig": a.Sig}, "WS")
+	ik, ok := s.chanVerify(s.conf().Domain, "GET", r.URL.Path, map[string]string{"ik": a.IK, "ts": a.Ts, "nonce": a.Nonce, "sig": a.Sig}, "WS")
 	if !ok {
 		_ = c.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
@@ -793,6 +803,102 @@ func (s *Server) channelStream(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
+		}
+	}
+}
+
+// ---- Öffentliche Kanäle: lesen ohne Konto ----
+
+func (s *Server) publicChannel(w http.ResponseWriter, r *http.Request) *store.Channel {
+	ch, err := s.st.Channel(r.PathValue("id"))
+	if err != nil || !s.conf().Channels || !ch.Policy.Public {
+		writeErr(w, 404, "not found")
+		return nil
+	}
+	return ch
+}
+
+func (s *Server) publicChannelLog(w http.ResponseWriter, r *http.Request) {
+	ch := s.publicChannel(w, r)
+	if ch == nil {
+		return
+	}
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	es, err := s.st.ChannelLog(ch.ID, after, limit)
+	if err != nil {
+		writeErr(w, 500, "internal error")
+		return
+	}
+	out := make([]any, 0, len(es))
+	for _, e := range es {
+		out = append(out, entryJSON(e))
+	}
+	writeJSON(w, 200, map[string]any{"id": ch.ID, "title": string(ch.TitleEnc), "public": true, "entries": out})
+}
+
+// publicChannelEvents: Server-Sent Events für Mitleser ohne Konto (auch mit curl -N nutzbar). Jede Nachricht ist ein Log-Eintrag als JSON.
+func (s *Server) publicChannelEvents(w http.ResponseWriter, r *http.Request) {
+	ch := s.publicChannel(w, r)
+	if ch == nil {
+		return
+	}
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, 500, "streaming unsupported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(200)
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if v := r.Header.Get("Last-Event-ID"); v != "" {
+		after, _ = strconv.ParseInt(v, 10, 64)
+	}
+	sub := s.chans.subscribe(ch.ID)
+	defer s.chans.unsubscribe(ch.ID, sub)
+	flush := func() bool {
+		for {
+			es, err := s.st.ChannelLog(ch.ID, after, 100)
+			if err != nil {
+				return false
+			}
+			for _, e := range es {
+				b, _ := json.Marshal(entryJSON(e))
+				if _, err := w.Write([]byte("id: " + strconv.FormatInt(e.Seq, 10) + "\ndata: " + string(b) + "\n\n")); err != nil {
+					return false
+				}
+				after = e.Seq
+			}
+			fl.Flush()
+			if len(es) < 100 {
+				return true
+			}
+		}
+	}
+	if !flush() {
+		return
+	}
+	ping := time.NewTicker(25 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-s.stop:
+			return
+		case <-sub:
+			if !flush() {
+				return
+			}
+		case <-ping.C:
+			if _, err := w.Write([]byte(": ping\n\n")); err != nil {
+				return
+			}
+			fl.Flush()
 		}
 	}
 }

@@ -83,6 +83,12 @@ CREATE TABLE IF NOT EXISTS filters(
   PRIMARY KEY(user_id, domain_hash)
 );
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS account_sync(
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  data BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `
 
 // SchemaVersion: 2 = Multi-Device. Ältere Datenbanken sind inkompatibel (Credentials/Protokoll) und werden beiseitegelegt.
@@ -122,10 +128,13 @@ func Open(dir string) (*Store, error) {
 			return nil, err
 		}
 	}
-	if _, err := db.Exec(schema + channelSchema); err != nil {
+	if _, err := db.Exec(schema + channelSchema + hookSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
 	st := &Store{db}
+	if err := st.migrate(); err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	if err := st.SetMeta("schema_version", []byte(fmt.Sprint(SchemaVersion))); err != nil {
 		return nil, err
 	}
@@ -155,6 +164,8 @@ func (s *Store) SetMeta(k string, v []byte) error {
 // ---- Nutzer ----
 
 type User struct {
+	Admin      bool
+	CreatedAt  int64
 	ID         int64
 	Name       string
 	IK         []byte
@@ -164,8 +175,10 @@ type User struct {
 
 func (s *Store) UserByName(name string) (*User, error) {
 	u := &User{}
-	err := s.db.QueryRow(`SELECT id,name,ik,filter_mode,quota FROM users WHERE name=?`, name).
-		Scan(&u.ID, &u.Name, &u.IK, &u.FilterMode, &u.Quota)
+	var adm int
+	err := s.db.QueryRow(`SELECT id,name,ik,filter_mode,quota,is_admin,created_at FROM users WHERE name=?`, name).
+		Scan(&u.ID, &u.Name, &u.IK, &u.FilterMode, &u.Quota, &adm, &u.CreatedAt)
+	u.Admin = adm == 1
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -208,7 +221,15 @@ func (s *Store) Register(inviteHash []byte, name string, ik []byte, dev Device, 
 			return ErrNotFound
 		}
 	}
-	res, err := tx.Exec(`INSERT INTO users(name,ik,created_at) VALUES(?,?,?)`, name, ik, now())
+	var existing int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&existing); err != nil {
+		return err
+	}
+	admin := 0
+	if existing == 0 { // der erste Nutzer ist Administrator
+		admin = 1
+	}
+	res, err := tx.Exec(`INSERT INTO users(name,ik,created_at,is_admin) VALUES(?,?,?,?)`, name, ik, now(), admin)
 	if err != nil {
 		return ErrConflict
 	}
@@ -687,4 +708,49 @@ func contains(l []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// migrate ergänzt Spalten älterer Datenbanken und bestimmt ggf. den Administrator (ältester Nutzer).
+func (s *Store) migrate() error {
+	addCol := func(table, col, def string) error {
+		rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+		if err != nil {
+			return err
+		}
+		has := false
+		for rows.Next() {
+			var cid int
+			var name, typ string
+			var notnull, pk int
+			var dflt sql.NullString
+			if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				rows.Close()
+				return err
+			}
+			if name == col {
+				has = true
+			}
+		}
+		rows.Close()
+		if has {
+			return nil
+		}
+		_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + col + ` ` + def)
+		return err
+	}
+	if err := addCol("users", "is_admin", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addCol("channel_log", "hook", "TEXT"); err != nil {
+		return err
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE is_admin=1`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		_, err := s.db.Exec(`UPDATE users SET is_admin=1 WHERE id=(SELECT MIN(id) FROM users)`)
+		return err
+	}
+	return nil
 }

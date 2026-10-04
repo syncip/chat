@@ -53,7 +53,7 @@ func newFederation(s *Server) *federation {
 		Timeout: 10 * time.Second,
 		// SSRF-Schutz: keine Verbindungen in private/lokale Netze (außer im Test-Modus).
 		Control: func(network, address string, c syscall.RawConn) error {
-			if s.cfg.FedInsecure {
+			if s.conf().FedInsecure {
 				return nil
 			}
 			host, _, err := net.SplitHostPort(address)
@@ -94,7 +94,7 @@ func isIPHost(domain string) bool {
 }
 
 func (f *federation) base(domain string) string {
-	if f.s.cfg.FedInsecure || isIPHost(domain) {
+	if f.s.conf().FedInsecure || isIPHost(domain) {
 		return "http://" + domain
 	}
 	return "https://" + domain
@@ -102,7 +102,7 @@ func (f *federation) base(domain string) string {
 
 // allowed wertet den Föderationsmodus des Betreibers aus (open | allowlist | closed + Blocklist).
 func (f *federation) allowed(domain string) bool {
-	c := f.s.cfg
+	c := f.s.conf()
 	for _, b := range c.FedBlock {
 		if b == domain {
 			return false
@@ -173,7 +173,7 @@ func (f *federation) deliver(ctx context.Context, domain, mailboxID, token strin
 	sig := ed25519.Sign(f.s.key, fedCanonical(domain, ts, hex.EncodeToString(sum[:])))
 	req, _ := http.NewRequestWithContext(ctx, "POST", f.base(domain)+"/v1/federation/deliver", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Chat-Origin", f.s.cfg.Domain)
+	req.Header.Set("X-Chat-Origin", f.s.conf().Domain)
 	req.Header.Set("X-Chat-Ts", ts)
 	req.Header.Set("X-Chat-Sig", b64.EncodeToString(sig))
 	resp, err := f.client.Do(req)
@@ -230,14 +230,14 @@ func (s *Server) fedDeliver(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 403, "federation not permitted")
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.MaxEnvelopeSize*2+4096))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.conf().MaxEnvelopeSize*2+4096))
 	if err != nil {
 		writeErr(w, 413, "invalid size")
 		return
 	}
 	key, err := s.fed.serverKey(r.Context(), origin)
 	sum := sha256.Sum256(body)
-	if err != nil || !ed25519.Verify(key, fedCanonical(s.cfg.Domain, ts, hex.EncodeToString(sum[:])), sigb) {
+	if err != nil || !ed25519.Verify(key, fedCanonical(s.conf().Domain, ts, hex.EncodeToString(sum[:])), sigb) {
 		writeErr(w, 401, "unauthorized")
 		return
 	}

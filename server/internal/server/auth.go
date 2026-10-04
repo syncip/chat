@@ -101,7 +101,7 @@ func (s *Server) auth(h userHandler) http.HandlerFunc {
 			return
 		}
 		sum := sha256.Sum256(body)
-		u, d, ok := s.verifySig(s.cfg.Domain, r.Method, r.URL.RequestURI(), a, hex.EncodeToString(sum[:]))
+		u, d, ok := s.verifySig(s.conf().Domain, r.Method, r.URL.RequestURI(), a, hex.EncodeToString(sum[:]))
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
@@ -120,7 +120,7 @@ func (s *Server) authStream(h userHandler) http.HandlerFunc {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		u, d, ok := s.verifySig(s.cfg.Domain, r.Method, r.URL.RequestURI(), a, "UNSIGNED")
+		u, d, ok := s.verifySig(s.conf().Domain, r.Method, r.URL.RequestURI(), a, "UNSIGNED")
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
@@ -132,8 +132,8 @@ func (s *Server) authStream(h userHandler) http.HandlerFunc {
 // ---- Proof-of-Work (offene Registrierung) ----
 
 func (s *Server) powBits() int {
-	if s.cfg.Registration == "open" {
-		return s.cfg.RegistrationPoW
+	if s.conf().Registration == "open" {
+		return s.conf().RegistrationPoW
 	}
 	return 0
 }

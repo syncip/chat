@@ -19,7 +19,7 @@ func (s *Server) quotaFor(u *store.User) int64 {
 	if u.Quota > 0 {
 		return u.Quota
 	}
-	return s.cfg.UserQuota
+	return s.conf().UserQuota
 }
 
 // postBlob nimmt eine clientseitig verschlüsselte Datei entgegen. Der Server sieht nur Chiffretext.
@@ -29,7 +29,7 @@ func (s *Server) postBlob(w http.ResponseWriter, r *http.Request, u *store.User)
 		writeErr(w, 411, "content-length required")
 		return
 	}
-	if size > s.cfg.MaxFileSize+s.cfg.MaxFileSize/1024*16+64 { // Chunk-Tags (16 B pro 64 KiB) einrechnen
+	if size > s.conf().MaxFileSize+s.conf().MaxFileSize/1024*16+64 { // Chunk-Tags (16 B pro 64 KiB) einrechnen
 		writeErr(w, 413, "file too large")
 		return
 	}
@@ -60,7 +60,7 @@ func (s *Server) postBlob(w http.ResponseWriter, r *http.Request, u *store.User)
 		writeErr(w, 400, "upload incomplete")
 		return
 	}
-	if err := s.st.AddBlob(u.ID, id, size, s.cfg.BlobRetention); err != nil {
+	if err := s.st.AddBlob(u.ID, id, size, s.conf().BlobRetention); err != nil {
 		_ = os.Remove(p)
 		writeErr(w, 500, "internal error")
 		return

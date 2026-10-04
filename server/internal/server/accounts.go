@@ -64,7 +64,7 @@ func (s *Server) parseDevice(w http.ResponseWriter, address string, ik []byte, d
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Registration == "closed" {
+	if s.conf().Registration == "closed" {
 		writeErr(w, http.StatusForbidden, "registration closed")
 		return
 	}
@@ -86,13 +86,13 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sig, err := b64.DecodeString(req.Sig)
-	msg := []byte("CHAT-REGISTER-V1\n" + s.cfg.Domain + "\n" + req.Name + "\n" + strconv.FormatInt(req.Ts, 10))
+	msg := []byte("CHAT-REGISTER-V1\n" + s.conf().Domain + "\n" + req.Name + "\n" + strconv.FormatInt(req.Ts, 10))
 	if err != nil || !ed25519.Verify(ik, msg, sig) {
 		writeErr(w, 400, "invalid signature")
 		return
 	}
 	var inviteHash []byte
-	switch s.cfg.Registration {
+	switch s.conf().Registration {
 	case "invite":
 		if req.Invite == "" {
 			writeErr(w, 403, "invite required")
@@ -109,7 +109,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	dev, inbox, ok := s.parseDevice(w, req.Name+"@"+s.cfg.Domain, ik, req.Device, req.Inbox)
+	dev, inbox, ok := s.parseDevice(w, req.Name+"@"+s.conf().Domain, ik, req.Device, req.Inbox)
 	if !ok {
 		return
 	}
@@ -125,14 +125,14 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "internal error")
 	default:
 		writeJSON(w, 201, map[string]any{
-			"address": req.Name + "@" + s.cfg.Domain,
+			"address": req.Name + "@" + s.conf().Domain,
 			"intro":   map[string]string{"mailbox_id": intro.ID, "send_token": tok},
 		})
 	}
 }
 
 func (s *Server) decodeKPs(w http.ResponseWriter, in []string, lastResort string) ([][]byte, []byte, bool) {
-	if len(in) > s.cfg.MaxKeyPackages {
+	if len(in) > s.conf().MaxKeyPackages {
 		writeErr(w, 400, "too many keypackages")
 		return nil, nil, false
 	}
@@ -185,7 +185,7 @@ func (s *Server) newInvite(w http.ResponseWriter, r *http.Request, by int64) {
 
 func (s *Server) adminInvite(w http.ResponseWriter, r *http.Request) {
 	k := r.Header.Get("X-Admin-Key")
-	if s.cfg.AdminKey == "" || len(k) != len(s.cfg.AdminKey) || !constEq(k, s.cfg.AdminKey) {
+	if s.conf().AdminKey == "" || len(k) != len(s.conf().AdminKey) || !constEq(k, s.conf().AdminKey) {
 		writeErr(w, 401, "unauthorized")
 		return
 	}
@@ -193,7 +193,7 @@ func (s *Server) adminInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) userInvite(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if !s.cfg.UserInvites {
+	if !s.conf().UserInvites && !u.Admin {
 		writeErr(w, 403, "user invites disabled")
 		return
 	}
@@ -212,7 +212,7 @@ func constEq(a, b string) bool {
 // BootstrapInvite erzeugt beim ersten Start (keine Nutzer) eine Einladung und gibt sie zurück.
 func (s *Server) BootstrapInvite() (string, error) {
 	n, err := s.st.UserCount()
-	if err != nil || n > 0 || s.cfg.Registration != "invite" {
+	if err != nil || n > 0 || s.conf().Registration != "invite" {
 		return "", err
 	}
 	tok := randID(16)
@@ -283,7 +283,7 @@ func (s *Server) addDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sig, err := b64.DecodeString(req.Sig)
-	msg := []byte("CHAT-ADD-DEVICE-V1\n" + s.cfg.Domain + "\n" + req.Name + "\n" + strconv.FormatInt(req.Ts, 10) + "\n" + req.Device.ID)
+	msg := []byte("CHAT-ADD-DEVICE-V1\n" + s.conf().Domain + "\n" + req.Name + "\n" + strconv.FormatInt(req.Ts, 10) + "\n" + req.Device.ID)
 	if err != nil || !ed25519.Verify(u.IK, msg, sig) {
 		writeErr(w, 401, "unauthorized")
 		return
@@ -296,11 +296,11 @@ func (s *Server) addDevice(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	dev, inbox, ok := s.parseDevice(w, req.Name+"@"+s.cfg.Domain, u.IK, req.Device, req.Inbox)
+	dev, inbox, ok := s.parseDevice(w, req.Name+"@"+s.conf().Domain, u.IK, req.Device, req.Inbox)
 	if !ok {
 		return
 	}
-	switch err := s.st.AddDevice(u.ID, dev, inbox, kps, last, s.cfg.MaxDevices); {
+	switch err := s.st.AddDevice(u.ID, dev, inbox, kps, last, s.conf().MaxDevices); {
 	case errors.Is(err, store.ErrLimit):
 		writeErr(w, 429, "device limit reached")
 	case errors.Is(err, store.ErrConflict):

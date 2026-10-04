@@ -47,6 +47,7 @@ type Config struct {
 	MaxChannelUsers  int // Mitglieder pro Kanal
 	MaxPostSize      int
 	ChannelRetention time.Duration
+	MaxHooks         int // Webhooks pro Kanal
 }
 
 func Load() (*Config, error) {
@@ -82,6 +83,7 @@ func Load() (*Config, error) {
 		MaxChannelUsers:  int(envInt("CHAT_MAX_CHANNEL_MEMBERS", 5000)),
 		MaxPostSize:      int(envInt("CHAT_MAX_POST_SIZE", 128<<10)),
 		ChannelRetention: envDays("CHAT_CHANNEL_RETENTION_DAYS", 90),
+		MaxHooks:         int(envInt("CHAT_MAX_HOOKS", 5)),
 	}
 	switch c.Registration {
 	case "invite", "open", "closed":

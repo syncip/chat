@@ -46,7 +46,7 @@ func newNode(t *testing.T, mod func(*config.Config)) *node {
 		MaxEnvelopeSize: 64 << 10, UserQuota: 3 << 20, BlobRetention: time.Hour, MessageRetention: time.Hour,
 		Federation: "open", FedInsecure: true, RatePerMinute: 100000, MaxMailboxes: 50, MaxKeyPackages: 5,
 		UserInvites: true, RegistrationPoW: 8, MaxDevices: 10,
-		Channels: true, MaxChannels: 10, MaxChannelUsers: 100, MaxPostSize: 64 << 10, ChannelRetention: time.Hour,
+		Channels: true, MaxChannels: 10, MaxChannelUsers: 100, MaxPostSize: 64 << 10, ChannelRetention: time.Hour, MaxHooks: 5,
 	}
 	if mod != nil {
 		mod(cfg)
@@ -654,7 +654,9 @@ func TestUserInvites(t *testing.T) {
 		t.Fatalf("user invite: %d", r.StatusCode)
 	}
 	n.cfg.UserInvites = false
-	alice.call("POST", "/v1/invites", nil, 403, nil)
+	carol := n.mustUser("carol") // kein Admin
+	carol.call("POST", "/v1/invites", nil, 403, nil)
+	alice.call("POST", "/v1/invites", nil, 201, nil) // Administratoren dürfen immer einladen
 }
 
 // addDevice: zweites Gerät, beglaubigt durch den Konto-Schlüssel (kein Altgerät nötig).

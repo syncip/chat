@@ -29,6 +29,15 @@ func newHub() *hub { return &hub{subs: map[string]map[chan event]struct{}{}} }
 
 func hubKey(uid int64, dev string) string { return strconv.FormatInt(uid, 10) + ":" + dev }
 
+func (h *hub) count() (n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range h.subs {
+		n += len(m)
+	}
+	return
+}
+
 func (h *hub) subscribe(uid int64, dev string) chan event {
 	ch := make(chan event, 64)
 	k := hubKey(uid, dev)
@@ -104,7 +113,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	var dev *store.Device
 	var ok bool
 	if json.Unmarshal(msg, &a) == nil {
-		u, dev, ok = s.verifySig(s.cfg.Domain, "GET", "/v1/stream", map[string]string{
+		u, dev, ok = s.verifySig(s.conf().Domain, "GET", "/v1/stream", map[string]string{
 			"name": a.Name, "dev": a.Dev, "ts": a.Ts, "nonce": a.Nonce, "sig": a.Sig}, "WS")
 	}
 	if !ok {
@@ -133,6 +142,8 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 			var msg map[string]any
 			if e.Type == "devices" {
 				msg = map[string]any{"type": "devices"}
+			} else if e.Type == "sync" {
+				msg = map[string]any{"type": "sync", "version": e.Seq}
 			} else {
 				msg = map[string]any{"type": "message", "seq": e.Seq, "mailbox_id": e.MailboxID, "data": b64.EncodeToString(e.Data)}
 			}

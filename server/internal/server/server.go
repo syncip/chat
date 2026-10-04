@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/syncip/chat/server/internal/config"
@@ -30,7 +31,9 @@ const apiVersion = 1
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{1,31}$`)
 
 type Server struct {
-	cfg      *config.Config
+	cfgp     atomic.Pointer[config.Config]
+	started  time.Time
+	reqTotal atomic.Int64
 	st       *store.Store
 	log      *slog.Logger
 	key      ed25519.PrivateKey
@@ -48,13 +51,17 @@ type Server struct {
 
 func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Server, error) {
 	s := &Server{
-		cfg: cfg, st: st, log: log,
+		st: st, log: log, started: time.Now(),
 		hub:     newHub(),
 		chans:   newChanHub(),
 		nonces:  newNonceCache(5 * time.Minute),
 		limiter: newLimiter(cfg.RatePerMinute),
 		blobDir: filepath.Join(cfg.DataDir, "blobs"),
 		stop:    make(chan struct{}),
+	}
+	s.cfgp.Store(cfg)
+	if err := s.loadSettings(); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(s.blobDir, 0o700); err != nil {
 		return nil, err
@@ -75,6 +82,9 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Server, error)
 }
 
 func (s *Server) Handler() http.Handler { return s }
+
+// conf liefert die aktuelle Konfiguration (kann vom Administrator zur Laufzeit ersetzt werden).
+func (s *Server) conf() *config.Config { return s.cfgp.Load() }
 
 // Close beendet Hintergrundjobs.
 func (s *Server) Close() { s.stopOnce.Do(func() { close(s.stop) }) }
@@ -126,11 +136,33 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /v1/blobs/{id}", s.auth(s.deleteBlob))
 	m.HandleFunc("GET /v1/quota", s.auth(s.quota))
 	m.HandleFunc("GET /v1/stream", s.stream)
+	m.HandleFunc("GET /v1/me", s.auth(s.me))
+	m.HandleFunc("GET /v1/admin/stats", s.adminOnly(s.adminStats))
+	m.HandleFunc("GET /v1/admin/settings", s.adminOnly(s.adminGetSettings))
+	m.HandleFunc("PUT /v1/admin/settings", s.adminOnly(s.adminPutSettings))
+	m.HandleFunc("GET /v1/admin/users", s.adminOnly(s.adminUsers))
+	m.HandleFunc("PUT /v1/admin/users/{name}/admin", s.adminOnly(s.adminSetAdmin))
+	m.HandleFunc("GET /v1/sync", s.auth(s.getSync))
+	m.HandleFunc("PUT /v1/sync", s.auth(s.putSync))
 	// Kanäle
 	m.HandleFunc("POST /v1/channels", s.auth(s.createChannel))
 	m.HandleFunc("GET /v1/channels/{id}", s.channelInfo)
 	m.HandleFunc("GET /v1/channels/{id}/captcha", s.channelCaptcha)
 	m.HandleFunc("GET /v1/channels/{id}/stream", s.channelStream)
+	m.HandleFunc("GET /v1/channels/{id}/public/log", s.publicChannelLog)
+	m.HandleFunc("GET /v1/channels/{id}/public/events", s.publicChannelEvents)
+	m.HandleFunc("POST /v1/channels/{id}/hooks", s.chanAuth(s.channelHookCreate))
+	m.HandleFunc("GET /v1/channels/{id}/hooks", s.chanAuth(s.channelHookList))
+	m.HandleFunc("DELETE /v1/channels/{id}/hooks/{hid}", s.chanAuth(s.channelHookDelete))
+	for _, pfx := range []string{"/h/{token}", "/v1/hook/{token}"} {
+		for _, sfx := range []string{"", "/publish", "/send", "/trigger"} {
+			m.HandleFunc("POST "+pfx+sfx, s.hookPublish)
+			m.HandleFunc("PUT "+pfx+sfx, s.hookPublish)
+			if sfx != "" {
+				m.HandleFunc("GET "+pfx+sfx, s.hookPublish)
+			}
+		}
+	}
 	m.HandleFunc("POST /v1/channels/{id}/join", s.chanAuth(s.channelJoin))
 	m.HandleFunc("GET /v1/channels/{id}/log", s.chanAuth(s.channelLog))
 	m.HandleFunc("POST /v1/channels/{id}/posts", s.chanAuth(s.channelPost))
@@ -139,7 +171,7 @@ func (s *Server) routes() {
 	m.HandleFunc("PUT /v1/channels/{id}/settings", s.chanAuth(s.channelSettings))
 	m.HandleFunc("POST /v1/channels/{id}/leave", s.chanAuth(s.channelLeave))
 	m.HandleFunc("DELETE /v1/channels/{id}", s.chanAuth(s.channelDelete))
-	if s.cfg.WebDir != "" {
+	if s.conf().WebDir != "" {
 		m.Handle("/", s.webHandler())
 	}
 	s.mux = m
@@ -151,9 +183,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Cache-Control", "no-store")
-	if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
+	if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/h/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
 		h.Set("Access-Control-Allow-Origin", "*")
-		h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Send-Token, X-Body-Hash, X-Admin-Key")
+		h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Send-Token, X-Body-Hash, X-Admin-Key, Title, Priority, Tags, Click, X-Title, X-Priority, X-Tags, X-Click, Last-Event-ID")
 		h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		h.Set("Access-Control-Max-Age", "600")
 		if r.Method == http.MethodOptions {
@@ -165,6 +197,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.reqTotal.Add(1)
 	defer func() {
 		if rec := recover(); rec != nil && rec != http.ErrAbortHandler {
 			s.log.Error("panic", "path", r.URL.Path, "err", rec)
@@ -175,7 +208,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) clientIP(r *http.Request) string {
-	if hdr := s.cfg.TrustProxyHdr; hdr != "" {
+	if hdr := s.conf().TrustProxyHdr; hdr != "" {
 		if v := r.Header.Get(hdr); v != "" {
 			return strings.TrimSpace(strings.Split(v, ",")[0])
 		}
@@ -237,20 +270,20 @@ var b64 = base64.StdEncoding
 
 func jsonUnmarshal(b []byte, v any) bool { return json.Unmarshal(b, v) == nil }
 
-func (s *Server) isLocal(domain string) bool { return strings.EqualFold(domain, s.cfg.Domain) }
+func (s *Server) isLocal(domain string) bool { return strings.EqualFold(domain, s.conf().Domain) }
 
 // ---- Öffentliche Basis-Endpunkte ----
 
 func (s *Server) wellKnown(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
-		"domain":     s.cfg.Domain,
+		"domain":     s.conf().Domain,
 		"server_key": b64.EncodeToString(s.key.Public().(ed25519.PublicKey)),
 		"version":    apiVersion,
 	})
 }
 
 func (s *Server) serverInfo(w http.ResponseWriter, r *http.Request) {
-	c := s.cfg
+	c := s.conf()
 	writeJSON(w, 200, map[string]any{
 		"domain":       c.Domain,
 		"version":      apiVersion,
@@ -306,10 +339,10 @@ func (s *Server) sweep() {
 	for _, id := range ids {
 		_ = os.Remove(s.blobPath(id))
 	}
-	if err := s.st.PurgeMessages(s.cfg.MessageRetention); err != nil {
+	if err := s.st.PurgeMessages(s.conf().MessageRetention); err != nil {
 		s.log.Error("purge", "err", err)
 	}
-	if err := s.st.PurgeChannelLog(s.cfg.ChannelRetention); err != nil {
+	if err := s.st.PurgeChannelLog(s.conf().ChannelRetention); err != nil {
 		s.log.Error("purge channels", "err", err)
 	}
 	s.nonces.sweep()

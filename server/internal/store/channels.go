@@ -71,6 +71,7 @@ type ChannelPolicy struct {
 	ProbationSeconds int64  `json:"probation_seconds"` // Neue dürfen erst nach dieser Zeit schreiben
 	MembersCanWrite  bool   `json:"members_can_write"` // false: Kanal ist für normale Mitglieder „nur lesen“
 	SlowModeSeconds  int64  `json:"slow_mode_seconds"` // Mindestabstand zwischen Beiträgen eines Mitglieds
+	Public           bool   `json:"public"`            // öffentlich: unverschlüsselt, ohne Konto lesbar (nur bei Erstellung wählbar)
 }
 
 func (p ChannelPolicy) Valid() bool {
@@ -134,6 +135,7 @@ type LogEntry struct {
 	Kind    string
 	Target  []byte
 	Meta    string
+	Hook    string // Name des Webhooks, falls der Beitrag über einen Webhook kam
 }
 
 func (s *Store) CreateChannel(c Channel, ownerAddr string, maxPerUser int) error {
@@ -327,7 +329,7 @@ func (s *Store) DeletePost(chID, postID string) (author []byte, err error) {
 }
 
 func (s *Store) ChannelLog(chID string, after int64, limit int) ([]LogEntry, error) {
-	rows, err := s.db.Query(`SELECT seq,type,COALESCE(post_id,''),ik,COALESCE(address,''),ts,epoch,data,sig,deleted,COALESCE(kind,''),target,COALESCE(meta,'') FROM channel_log WHERE channel_id=? AND seq>? ORDER BY seq LIMIT ?`, chID, after, limit)
+	rows, err := s.db.Query(`SELECT seq,type,COALESCE(post_id,''),ik,COALESCE(address,''),ts,epoch,data,sig,deleted,COALESCE(kind,''),target,COALESCE(meta,''),COALESCE(hook,'') FROM channel_log WHERE channel_id=? AND seq>? ORDER BY seq LIMIT ?`, chID, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +338,7 @@ func (s *Store) ChannelLog(chID string, after int64, limit int) ([]LogEntry, err
 	for rows.Next() {
 		var e LogEntry
 		var del int
-		if err := rows.Scan(&e.Seq, &e.Type, &e.PostID, &e.IK, &e.Address, &e.TS, &e.Epoch, &e.Data, &e.Sig, &del, &e.Kind, &e.Target, &e.Meta); err != nil {
+		if err := rows.Scan(&e.Seq, &e.Type, &e.PostID, &e.IK, &e.Address, &e.TS, &e.Epoch, &e.Data, &e.Sig, &del, &e.Kind, &e.Target, &e.Meta, &e.Hook); err != nil {
 			return nil, err
 		}
 		e.Deleted = del == 1

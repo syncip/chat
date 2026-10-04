@@ -44,7 +44,7 @@ func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request, u *store.
 	}
 	tok := randID(24)
 	m := store.MailboxInit{ID: randID(16), TokenHash: hashToken(tok)}
-	switch err := s.st.CreateMailbox(u.ID, dev, account, m, s.cfg.MaxMailboxes); {
+	switch err := s.st.CreateMailbox(u.ID, dev, account, m, s.conf().MaxMailboxes); {
 	case errors.Is(err, store.ErrConflict):
 		writeErr(w, 429, "mailbox limit reached")
 	case err != nil:
@@ -67,7 +67,7 @@ var errBlocked = errors.New("blocked")
 
 // deliverLocal legt die Nachricht ins Postfach. `origin` ist die Herkunfts-Domain (leer bei direktem Einwurf).
 func (s *Server) deliverLocal(mailboxID, token string, data []byte, origin string) error {
-	if int64(len(data)) > s.cfg.MaxEnvelopeSize || len(data) == 0 {
+	if int64(len(data)) > s.conf().MaxEnvelopeSize || len(data) == 0 {
 		return errTooLarge
 	}
 	mb, err := s.st.Mailbox(mailboxID)
@@ -118,7 +118,7 @@ func (s *Server) deliverStatus(w http.ResponseWriter, err error) {
 
 // putMessage: anonymer Einwurf per Capability (Sealed Sender; der Server erfährt den Absender nicht).
 func (s *Server) putMessage(w http.ResponseWriter, r *http.Request) {
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.MaxEnvelopeSize+1))
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.conf().MaxEnvelopeSize+1))
 	if err != nil {
 		writeErr(w, 413, "invalid size")
 		return
@@ -179,7 +179,7 @@ func (s *Server) putKeyPackages(w http.ResponseWriter, r *http.Request, u *store
 	if !ok {
 		return
 	}
-	switch err := s.st.AddKeyPackages(u.ID, devOf(r).ID, kps, last, s.cfg.MaxKeyPackages); {
+	switch err := s.st.AddKeyPackages(u.ID, devOf(r).ID, kps, last, s.conf().MaxKeyPackages); {
 	case errors.Is(err, store.ErrConflict):
 		writeErr(w, 409, "too many keypackages")
 	case err != nil:
@@ -254,7 +254,7 @@ type relayReq struct {
 // relay stellt eine Nachricht im Auftrag des Nutzers zu (verbirgt dessen IP vor dem Remote-Server).
 func (s *Server) relay(w http.ResponseWriter, r *http.Request, _ *store.User) {
 	var req relayReq
-	if !readJSON(w, r, s.cfg.MaxEnvelopeSize*2+4096, &req) {
+	if !readJSON(w, r, s.conf().MaxEnvelopeSize*2+4096, &req) {
 		return
 	}
 	data, err := b64.DecodeString(req.Data)
@@ -264,14 +264,14 @@ func (s *Server) relay(w http.ResponseWriter, r *http.Request, _ *store.User) {
 	}
 	domain := normDomain(req.Domain)
 	if s.isLocal(domain) {
-		s.deliverStatus(w, s.deliverLocal(req.MailboxID, req.SendToken, data, s.cfg.Domain))
+		s.deliverStatus(w, s.deliverLocal(req.MailboxID, req.SendToken, data, s.conf().Domain))
 		return
 	}
 	if !validDomain(domain) || !s.fed.allowed(domain) {
 		writeErr(w, 403, "federation not permitted")
 		return
 	}
-	if int64(len(data)) > s.cfg.MaxEnvelopeSize {
+	if int64(len(data)) > s.conf().MaxEnvelopeSize {
 		writeErr(w, 413, "invalid size")
 		return
 	}

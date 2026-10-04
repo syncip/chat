@@ -65,6 +65,15 @@ func newLimiter(perMinute int) *limiter {
 	return &limiter{rate: float64(perMinute) / 60, max: float64(perMinute), m: map[string]*bucket{}}
 }
 
+func (l *limiter) setRate(perMinute int) {
+	if perMinute <= 0 {
+		return
+	}
+	l.mu.Lock()
+	l.rate, l.max = float64(perMinute)/60, float64(perMinute)
+	l.mu.Unlock()
+}
+
 func (l *limiter) allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()

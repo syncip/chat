@@ -15,12 +15,12 @@ const cspTmpl = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style
 
 // webHandler liefert das Web-Bundle (SPA) mit strikten Sicherheits-Headern aus.
 func (s *Server) webHandler() http.Handler {
-	root := s.cfg.WebDir
+	root := s.conf().WebDir
 	extra := ""
-	if x := strings.TrimSpace(s.cfg.CSPConnectExtra); x != "" && !strings.ContainsAny(x, ";\n\r") {
+	if x := strings.TrimSpace(s.conf().CSPConnectExtra); x != "" && !strings.ContainsAny(x, ";\n\r") {
 		extra = " " + x
 	}
-	if isIPHost(s.cfg.Domain) { // Betrieb über IP:PORT ohne TLS: Verbindungen zu anderen IP-Servern per http/ws erlauben
+	if isIPHost(s.conf().Domain) { // Betrieb über IP:PORT ohne TLS: Verbindungen zu anderen IP-Servern per http/ws erlauben
 		extra += " http: ws:"
 	}
 	csp := fmt.Sprintf(cspTmpl, extra)

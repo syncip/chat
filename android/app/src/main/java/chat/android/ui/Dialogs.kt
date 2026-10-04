@@ -33,26 +33,33 @@ fun StartChatDialog(vm: AppViewModel, onClose: () -> Unit, onStarted: (String) -
     var err by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val clip = LocalClipboardManager.current
+    fun start(input: String) {
+        busy = true; err = ""
+        vm.run(onError = { err = it; busy = false }) {
+            val t = input.trim()
+            val isCode = t.length <= 80 && Regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,39}(@[A-Za-z0-9.:-]+)?$").matches(t)
+            val id = vm.engine.startChat(if (isCode) vm.engine.resolveChatCode(t) else decodeCard(input))
+            busy = false
+            onStarted(id)
+        }
+    }
+    val scan = rememberQrScanner("QR-Code eines Kontakts scannen") { text -> link = text; start(text) }
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Neuer Chat") },
         text = {
             Column {
-                Text("Füge den Kontaktlink deines Gegenübers ein. Nur wer dir seinen Link gibt, kann angeschrieben werden.", style = MaterialTheme.typography.bodySmall)
-                OutlinedTextField(value = link, onValueChange = { link = it }, minLines = 3, modifier = Modifier.fillMaxWidth(), placeholder = { Text("https://…/#/add/…") })
-                TextButton(onClick = { clip.getText()?.text?.let { link = it } }) { Text("Aus Zwischenablage einfügen") }
+                Text("Gib den Chat-Code deines Gegenübers ein (z. B. martinistcool, bei anderen Servern code@server), füge seinen Kontaktlink ein oder scanne seinen QR-Code. Nur wer dir Code oder Link gibt, kann angeschrieben werden.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value = link, onValueChange = { link = it }, minLines = 2, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Chat-Code oder https://…/#/add/…") })
+                Row {
+                    TextButton(onClick = scan) { Text("QR-Code scannen") }
+                    TextButton(onClick = { clip.getText()?.text?.let { link = it } }) { Text("Einfügen") }
+                }
                 if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
             }
         },
         confirmButton = {
-            Button(enabled = !busy && link.isNotBlank(), onClick = {
-                busy = true; err = ""
-                vm.run(onError = { err = it; busy = false }) {
-                    val id = vm.engine.startChat(decodeCard(link))
-                    busy = false
-                    onStarted(id)
-                }
-            }) { Text(if (busy) "…" else "Chat starten") }
+            Button(enabled = !busy && link.isNotBlank(), onClick = { start(link) }) { Text(if (busy) "…" else "Chat starten") }
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Abbrechen") } },
     )

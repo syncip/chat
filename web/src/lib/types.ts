@@ -201,6 +201,7 @@ export interface SecurityAlert {
 export interface ServerInfo {
   domain: string;
   version: number;
+  app_version?: string;
   registration: 'invite' | 'open' | 'closed';
   federation: string;
   client_hash: string;

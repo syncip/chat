@@ -54,6 +54,7 @@ internal class AccountSync(private val h: Host) {
         out["set:sendDelivered"] = JsonPrimitive(s.sendDelivered)
         out["set:sendRead"] = JsonPrimitive(s.sendRead)
         out["set:onceDropOwnCopy"] = JsonPrimitive(s.onceDropOwnCopy)
+        s.me.avatar?.let { out["set:avatar"] = JsonPrimitive(it) }
         s.blockedUsers.forEach { out["blockU:$it"] = JsonPrimitive(true) }
         s.blockedServers.forEach { out["blockS:$it"] = JsonPrimitive(true) }
         s.allowUsers.forEach { out["allowU:$it"] = JsonPrimitive(true) }
@@ -145,7 +146,9 @@ internal class AccountSync(private val h: Host) {
                     h.applyChannel(name, v["server"]!!.jsonPrimitive.content, v["key"]!!.jsonPrimitive.content, v["title"]!!.jsonPrimitive.content, v["createdAt"]?.jsonPrimitive?.longOrNull ?: 0L)
                 } else h.applyChannel(name, null, "", "", 0)
             }
-            "set" -> if (on) {
+            "set" -> if (name == "avatar") {
+                s.me.avatar = if (on) (it.value as? JsonPrimitive)?.takeIf { p -> p !is JsonNull }?.content else null
+            } else if (on) {
                 val p = it.value as? JsonPrimitive
                 if (p != null && p !is JsonNull) when (name) {
                     "filterMode" -> s.filterMode = p.content

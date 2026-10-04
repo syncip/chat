@@ -29,16 +29,23 @@ import androidx.compose.ui.unit.dp
 import chat.engine.AppState
 import chat.engine.Part
 
-class FileEntry(val part: Part.File, val from: String, val ts: Long, val convTitle: String, val msgId: String)
+class FileEntry(val part: Part.File, val from: String, val ts: Long, val convTitle: String, val msgId: String, val convId: String, val chanId: String?, val mine: Boolean)
 
-/** Alle Dateien aus den Chats (oder nur einem Chat), neueste zuerst. Einmal-Nachrichten und gelöschte Nachrichten zählen nicht. */
+/** Alle Dateien aus den Chats und Kanälen (oder nur einem Chat/Kanal), neueste zuerst. Einmal-Nachrichten und gelöschte Nachrichten zählen nicht. */
 fun collectFiles(s: AppState, convId: String?): List<FileEntry> {
     val out = mutableListOf<FileEntry>()
     for (c in s.conversations.values) {
         if (convId != null && c.id != convId) continue
         for (m in c.messages) {
             if (m.deleted == true || m.once == true) continue
-            for (p in m.parts) if (p is Part.File) out.add(FileEntry(p, m.from, m.ts, c.title, m.id))
+            for (p in m.parts) if (p is Part.File) out.add(FileEntry(p, m.from, m.ts, c.title, m.id, c.id, null, m.from == s.me.address))
+        }
+    }
+    for (c in s.channels.values) {
+        if (convId != null && c.id != convId) continue
+        for (m in c.posts) {
+            if (m.deleted || m.bad) continue
+            for (p in m.parts) if (p is Part.File) out.add(FileEntry(p, if (m.hook != null) "🔔 ${m.hook}" else m.from, m.ts, "📢 ${c.title}", m.id, c.id, c.id, m.hook == null && m.from == s.me.address))
         }
     }
     return out.sortedByDescending { it.ts }
@@ -56,7 +63,11 @@ fun FilesScreen(vm: AppViewModel, s: AppState, convId: String?, onBack: () -> Un
     val all = remember(s, convId) { collectFiles(s, convId) }
     var tab by remember { mutableStateOf("all") }
     var q by remember { mutableStateOf("") }
-    val shown = all.filter { (tab == "all" || kindOf(it.part) == tab) && (q.isBlank() || it.part.name.contains(q, ignoreCase = true)) }
+    var onlyMine by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf("") }
+    var toDelete by remember { mutableStateOf<FileEntry?>(null) }
+    val shown = all.filter { (tab == "all" || kindOf(it.part) == tab) && (!onlyMine || it.mine) && (q.isBlank() || it.part.name.contains(q, ignoreCase = true)) }
+    val mineBytes = all.filter { it.mine }.sumOf { it.part.size }
     val tabs = listOf("all" to "Alle", "images" to "Bilder", "media" to "Audio & Video", "docs" to "Dokumente")
     Scaffold(
         topBar = {
@@ -77,6 +88,11 @@ fun FilesScreen(vm: AppViewModel, s: AppState, convId: String?, onBack: () -> Un
                 value = q, onValueChange = { q = it }, singleLine = true, placeholder = { Text("Dateiname suchen …") },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             )
+            Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                androidx.compose.material3.Checkbox(checked = onlyMine, onCheckedChange = { onlyMine = it })
+                Text("Nur meine Dateien (${formatBytes(mineBytes)})")
+            }
+            if (err.isNotEmpty()) Text(err, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
             if (shown.isEmpty()) Text("Keine Dateien.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             LazyColumn(Modifier.weight(1f), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(shown, key = { it.msgId + it.part.blob_id }) { f ->
@@ -87,10 +103,25 @@ fun FilesScreen(vm: AppViewModel, s: AppState, convId: String?, onBack: () -> Un
                                 java.text.DateFormat.getDateInstance(java.text.DateFormat.SHORT).format(java.util.Date(f.ts)),
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (f.mine) TextButton(onClick = { toDelete = f }) { Text("Löschen") }
                         HorizontalDivider(Modifier.padding(top = 6.dp))
                     }
                 }
             }
         }
+    }
+    toDelete?.let { f ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { toDelete = null },
+            title = { Text("Datei löschen?") },
+            text = { Text("„${f.part.name}“: Die Nachricht bzw. der Beitrag mit allen enthaltenen Dateien wird für alle entfernt und der Speicher freigegeben.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    toDelete = null; err = ""
+                    vm.run(onError = { err = it }) { vm.engine.deleteOwnFiles(f.msgId, convId = if (f.chanId == null) f.convId else null, chanId = f.chanId) }
+                }) { Text("Löschen") }
+            },
+            dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Abbrechen") } },
+        )
     }
 }

@@ -149,7 +149,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
         </div>
       </section>
 
-      <p className="muted small">Chat Web {__APP_VERSION__}{(e.info as { app_version?: string } | undefined)?.app_version ? ` · Server ${(e.info as { app_version?: string }).app_version}` : ''}</p>
+      <p className="muted small">Chat Web {__APP_VERSION__}{e.info?.app_version ? ` · Server ${e.info.app_version}` : ''}</p>
 
       <section>
         <h3>Geräte</h3>

@@ -91,6 +91,12 @@ sealed class Content {
 
     @Serializable @SerialName("group_name")
     data class GroupName(val name: String) : Content()
+
+    @Serializable @SerialName("group_avatar")
+    data class GroupAvatar(val avatar: String? = null) : Content()
+
+    @Serializable @SerialName("profile")
+    data class Profile(val avatar: String? = null) : Content()
 }
 
 @Serializable
@@ -142,6 +148,8 @@ data class Conversation(
     /** Gerät wurde per Welcome aus dem eigenen Konto aufgenommen: Postfach erst ankündigen, wenn die Verzeichnisse da sind. */
     var pendingAnnounce: Boolean? = null,
     val createdAt: Long,
+    /** Gruppenbild (data-URL). */
+    var avatar: String? = null,
 )
 
 @Serializable
@@ -153,7 +161,7 @@ data class Contact(
 )
 
 @Serializable
-data class Me(val address: String, val domain: String, val name: String, val deviceId: String, val inboxId: String)
+data class Me(val address: String, val domain: String, val name: String, val deviceId: String, val inboxId: String, var avatar: String? = null)
 
 @Serializable
 data class IntroBox(val mailbox_id: String, val send_token: String, val key: String)
@@ -193,6 +201,8 @@ data class AppState(
     val alerts: MutableList<SecurityAlert> = mutableListOf(),
     /** Konto-Sync: zuletzt abgeglichene Version und lokale Änderungsstände je Eintrag. */
     var sync: SyncState? = null,
+    /** Profilbilder anderer Konten (Adresse → data-URL), per Chat empfangen. */
+    val avatars: MutableMap<String, String> = mutableMapOf(),
 )
 
 @Serializable
@@ -214,6 +224,7 @@ data class Limits(
 data class ServerInfo(
     val domain: String,
     val version: Int,
+    val app_version: String? = null,
     val registration: String,
     val federation: String,
     val client_hash: String = "",

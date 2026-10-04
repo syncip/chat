@@ -128,7 +128,7 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
                 }
                 if (requests.isNotEmpty()) {
                     item { Text("Anfragen", Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp), style = MaterialTheme.typography.labelLarge) }
-                    items(requests, key = { it.id }) { c -> ConvRow(c, badge = "neu") { screen = Screen.Chat(c.id) } }
+                    items(requests, key = { it.id }) { c -> ConvRow(c, vm.engine.avatarOfConv(s, c), badge = "neu") { screen = Screen.Chat(c.id) } }
                     item { HorizontalDivider() }
                 }
                 if (list.isEmpty() && s.channels.isEmpty()) item {
@@ -138,20 +138,23 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
                     )
                 }
                 items(s.channels.values.toList(), key = { "ch-" + it.id }) { ch ->
-                    Column(Modifier.fillMaxWidth().clickable { vm.run { vm.engine.markChannelRead(ch.id) }; screen = Screen.Channel(ch.id) }.padding(16.dp, 10.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("📢 ${ch.title}", style = MaterialTheme.typography.titleMedium, maxLines = 1)
-                            if (ch.unread > 0) Text(ch.unread.toString(), color = MaterialTheme.colorScheme.primary)
+                    Row(Modifier.fillMaxWidth().clickable { vm.run { vm.engine.markChannelRead(ch.id) }; screen = Screen.Channel(ch.id) }.padding(16.dp, 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        AvatarImage(ch.title, ch.avatar, 44.dp, square = true)
+                        Column(Modifier.weight(1f)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("📢 ${ch.title}", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                                if (ch.unread > 0) Text(ch.unread.toString(), color = MaterialTheme.colorScheme.primary)
+                            }
+                            Text(
+                                when (ch.me.status) { "pending" -> "Wartet auf Freigabe"; "banned" -> "Gesperrt"; else -> "Öffentlicher Kanal" },
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                            )
                         }
-                        Text(
-                            when (ch.me.status) { "pending" -> "Wartet auf Freigabe"; "banned" -> "Gesperrt"; else -> "Öffentlicher Kanal" },
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
-                        )
                     }
                     HorizontalDivider()
                 }
                 items(list, key = { it.id }) { c ->
-                    ConvRow(c, badge = if (c.unread > 0) c.unread.toString() else null) { vm.run { vm.engine.markRead(c.id) }; screen = Screen.Chat(c.id) }
+                    ConvRow(c, vm.engine.avatarOfConv(s, c), badge = if (c.unread > 0) c.unread.toString() else null) { vm.run { vm.engine.markRead(c.id) }; screen = Screen.Chat(c.id) }
                 }
             }
         }
@@ -168,13 +171,16 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
 }
 
 @Composable
-private fun ConvRow(c: Conversation, badge: String?, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp, 10.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text((if (c.kind == "group") "👥 " else "") + c.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-            if (badge != null) Text(badge, color = MaterialTheme.colorScheme.primary)
+private fun ConvRow(c: Conversation, avatar: String?, badge: String?, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp, 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        AvatarImage(c.title, avatar, 44.dp)
+        Column(Modifier.weight(1f)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text((if (c.kind == "group") "👥 " else "") + c.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                if (badge != null) Text(badge, color = MaterialTheme.colorScheme.primary)
+            }
+            Text(preview(c), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
         }
-        Text(preview(c), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
     }
     HorizontalDivider()
 }

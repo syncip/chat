@@ -84,6 +84,13 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
         Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (msg.isNotEmpty()) Text(msg, color = MaterialTheme.colorScheme.primary)
 
+            val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?" }
+            Text("Chat Android $version" + (vm.engine.info?.app_version?.let { " · Server $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            Section("Profilbild")
+            Text("Dein Bild sehen deine Chat-Partner (Ende-zu-Ende-verschlüsselt mitgeteilt) und deine anderen Geräte.", style = MaterialTheme.typography.bodySmall)
+            AvatarPickerRow(s.me.address, s.me.avatar, label = "Profilbild wählen", onPick = { d -> run(if (d != null) "Profilbild gesetzt." else "Profilbild entfernt.") { vm.engine.setMyAvatar(d) } }, onError = { msg = it })
+
             Section("Dein Kontaktlink")
             if (s.intro != null) {
                 Text("Wer diesen Link hat, kann dir eine Chat-Anfrage schicken. Du entscheidest, ob du sie annimmst.", style = MaterialTheme.typography.bodySmall)
@@ -95,6 +102,7 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
                         ctx.startActivity(android.content.Intent.createChooser(i, "Kontaktlink teilen"))
                     }) { Text("Teilen") }
                 }
+                ChatCodeSection(vm, link, onMsg = { msg = it })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { run("Kontaktlink deaktiviert.") { vm.engine.setIntroEnabled(false) } }) { Text("Deaktivieren") }
                     TextButton(onClick = { run("Neuer Link erzeugt, der alte ist ungültig.") { vm.engine.setIntroEnabled(false); vm.engine.setIntroEnabled(true) } }) { Text("Neu erzeugen") }
@@ -129,7 +137,8 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
             SwitchRow("Einmal-Nachrichten: eigene Kopie sofort entfernen", s.onceDropOwnCopy) { run { vm.engine.setReceiptSettings(onceDropOwnCopy = it) } }
 
             Section("Geräte")
-            Text("Dein Konto kann auf mehreren Geräten gleichzeitig aktiv sein. Neue Geräte meldest du mit der Backup-Datei an.", style = MaterialTheme.typography.bodySmall)
+            Text("Dein Konto kann auf mehreren Geräten gleichzeitig aktiv sein. Neue Geräte meldest du mit der Backup-Datei oder per QR-Code an.", style = MaterialTheme.typography.bodySmall)
+            DeviceLinkSection(vm, onMsg = { msg = it })
             devices.forEach { d ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(d.id + if (d.current) " (dieses Gerät)" else "", Modifier.weight(1f), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
@@ -227,5 +236,42 @@ private fun ListEditor(title: String, items: List<String>, value: String, setVal
             OutlinedTextField(value = value, onValueChange = setValue, placeholder = { Text(placeholder) }, singleLine = true, modifier = Modifier.weight(1f))
             Button(enabled = value.isNotBlank(), onClick = { onAdd(value) }) { Text("Hinzufügen") }
         }
+    }
+}
+
+@Composable
+private fun ChatCodeSection(vm: AppViewModel, link: String, onMsg: (String) -> Unit) {
+    var code by remember { mutableStateOf("") }
+    var saved by remember { mutableStateOf("") }
+    var qr by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { runCatching { vm.engine.myChatCode() }.onSuccess { saved = it; code = it } }
+    Text("Chat-Code", style = MaterialTheme.typography.labelLarge)
+    Text(
+        "Wähle einen Code (3–40 Zeichen: a–z, 0–9, _ und -). Wer ihn bei „Neuer Chat“ eingibt, landet bei dir. Der Code ist öffentlich auflösbar: wer ihn errät, kann dir eine Anfrage schicken (du entscheidest, ob du sie annimmst).",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    OutlinedTextField(code, { code = it.lowercase() }, label = { Text("z. B. martinistcool") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(enabled = code.isNotBlank() && code != saved, onClick = {
+            vm.run(onError = onMsg) { val c = vm.engine.setChatCode(code); saved = c; code = c; onMsg("Chat-Code „$c“ gespeichert.") }
+        }) { Text("Code speichern") }
+        if (saved.isNotEmpty()) TextButton(onClick = { vm.run(onError = onMsg) { vm.engine.removeChatCode(); saved = ""; code = ""; onMsg("Chat-Code entfernt.") } }) { Text("Entfernen") }
+    }
+    OutlinedButton(onClick = { qr = !qr }) { Text(if (qr) "QR-Code ausblenden" else "Meinen Kontakt-QR-Code anzeigen") }
+    if (qr) QrImage(link, 240.dp)
+}
+
+@Composable
+private fun DeviceLinkSection(vm: AppViewModel, onMsg: (String) -> Unit) {
+    var link by remember { mutableStateOf<String?>(null) }
+    Text(
+        "Weiteres Gerät per QR-Code anmelden: Der Code enthält einen Einmalschlüssel, gilt 5 Minuten und nur einmal. Zeige ihn niemandem und mache kein Foto davon.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    if (link == null) {
+        OutlinedButton(onClick = { vm.run(onError = onMsg) { link = vm.engine.createDeviceLink() } }) { Text("QR-Code anzeigen") }
+    } else {
+        QrImage(link!!, 260.dp)
+        TextButton(onClick = { link = null }) { Text("Code ausblenden") }
     }
 }

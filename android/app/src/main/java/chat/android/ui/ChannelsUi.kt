@@ -255,7 +255,12 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Column { Text("📢 ${ch.title}", maxLines = 1); Text("${ROLE[ch.me.role] ?: ch.me.role} · ${ch.server}", style = MaterialTheme.typography.bodySmall) } },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AvatarImage(ch.title, ch.avatar, 36.dp, square = true)
+                        Column { Text("📢 ${ch.title}", maxLines = 1); Text("${ROLE[ch.me.role] ?: ch.me.role} · ${ch.server}", style = MaterialTheme.typography.bodySmall) }
+                    }
+                },
                 navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
                 actions = { TextButton(onClick = { info = true }) { Text("ⓘ") } },
             )
@@ -303,7 +308,7 @@ private fun PostRow(vm: AppViewModel, ch: ChannelState, p: ChPost, mine: Boolean
             shape = RoundedCornerShape(14.dp),
             color = if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
             modifier = Modifier.widthIn(max = 320.dp),
-            onClick = { if (isMod && !p.deleted) menu = true },
+            onClick = { if ((isMod || (mine && p.hook == null)) && !p.deleted) menu = true },
         ) {
             Column(Modifier.padding(10.dp, 6.dp)) {
                 Text(if (p.hook != null) "🔔 ${p.hook} (Webhook)" else p.from, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -316,8 +321,8 @@ private fun PostRow(vm: AppViewModel, ch: ChannelState, p: ChPost, mine: Boolean
             }
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("Beitrag löschen") }, onClick = { menu = false; vm.run { vm.engine.channelMod(ch.id, "delete", postId = p.id) } })
-            if (!mine && p.hook == null) {
+            DropdownMenuItem(text = { Text("Beitrag löschen") }, onClick = { menu = false; vm.run { if (mine) vm.engine.deleteOwnFiles(p.id, chanId = ch.id) else vm.engine.channelMod(ch.id, "delete", postId = p.id) } })
+            if (isMod && !mine && p.hook == null) {
                 DropdownMenuItem(text = { Text("Autor sperren") }, onClick = { menu = false; vm.run { vm.engine.channelMod(ch.id, "ban", target = p.ik) } })
                 DropdownMenuItem(text = { Text("Autor 1 Std stummschalten") }, onClick = { menu = false; vm.run { vm.engine.channelMod(ch.id, "timeout", target = p.ik, seconds = 3600) } })
             }
@@ -360,6 +365,7 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
         title = { Text(ch.title) },
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (isOwner) AvatarPickerRow(ch.title, ch.avatar, square = true, label = "Kanalbild wählen", onPick = { d -> run { vm.engine.updateChannel(ch.id, null, ch.policy, avatar = d ?: "") } }, onError = { err = it })
                 if (dirty) Text("Ungespeicherte Änderungen – unten „Speichern“ tippen.", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
                 else if (saved) Text("✔ Gespeichert", color = levelColor(Level.Ok), style = MaterialTheme.typography.bodySmall)
                 if (ch.policy.isPublic) {

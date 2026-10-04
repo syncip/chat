@@ -24,6 +24,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
@@ -33,6 +35,7 @@ import androidx.fragment.app.FragmentActivity
 import chat.android.BiometricHelper
 import chat.android.SecureBlobStore
 import chat.engine.baseUrl
+import chat.engine.normalizeServer
 
 @Composable
 fun Field(label: String, value: String, onChange: (String) -> Unit, password: Boolean = false, hint: String? = null) {
@@ -64,9 +67,13 @@ fun OnboardingScreen(vm: AppViewModel) {
     var pass2 by remember { mutableStateOf("") }
     var backupPass by remember { mutableStateOf("") }
     var restore by remember { mutableStateOf(false) }
+    var qrMode by remember { mutableStateOf(false) }
+    var qrLink by remember { mutableStateOf<String?>(null) }
+    var probe by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf("") }
     var backupUri by remember { mutableStateOf<Uri?>(null) }
+    val scan = rememberQrScanner("Anmelde-QR-Code aus dem Webinterface scannen") { text -> qrLink = text; err = "" }
     val ctx = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { backupUri = it }
 
@@ -77,16 +84,29 @@ fun OnboardingScreen(vm: AppViewModel) {
             "Ende-zu-Ende-verschlüsselt. Dein Schlüssel wird auf diesem Gerät erzeugt und verlässt es nie.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        if (!restore) {
+        if (qrMode) {
+            Text("Öffne im Webinterface (oder in der App auf einem anderen Gerät) Einstellungen → „QR-Code anzeigen“ und scanne den Code. Er gilt 5 Minuten und nur einmal.", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = scan) { Text(if (qrLink == null) "QR-Code scannen" else "QR-Code gelesen ✓ (erneut scannen)") }
+        } else if (!restore) {
             Field("Server", server, { server = it }, hint = "chat.example.org oder 192.168.1.10:8080")
-            TransportWarning(server)
+            TransportWarning(normalizeServer(server))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(enabled = server.isNotBlank(), onClick = {
+                    probe = "Prüfe …"
+                    vm.run(onError = { probe = "✗ $it" }) {
+                        val i = vm.engine.probeServer(server)
+                        probe = "✓ ${i.domain}" + (i.app_version?.let { " (v$it)" } ?: "") + " · Registrierung: " + when (i.registration) { "open" -> "offen"; "invite" -> "nur mit Einladungscode"; else -> "geschlossen" }
+                    }
+                }) { Text("Server prüfen") }
+                if (probe.isNotEmpty()) Text(probe, style = MaterialTheme.typography.bodySmall, color = if (probe.startsWith("✗")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            }
             Field("Benutzername", name, { name = it.lowercase() })
-            Field("Einladungscode", invite, { invite = it }, hint = "nur bei Einladungs-Servern")
+            Field("Einladungscode", invite, { invite = it }, hint = "nur bei Einladungs-Servern (der erste Nutzer braucht den Code aus dem Server-Log)")
         } else {
             OutlinedButton(onClick = { pick.launch(arrayOf("*/*")) }) { Text(if (backupUri == null) "Backup-Datei wählen" else "Datei gewählt ✓") }
             Field("Passphrase des Backups", backupPass, { backupPass = it }, password = true)
         }
-        Field(if (restore) "Neue Passphrase für dieses Gerät" else "Passphrase (schützt deine Schlüssel lokal)", pass, { pass = it }, password = true)
+        Field(if (restore || qrMode) "Neue Passphrase für dieses Gerät" else "Passphrase (schützt deine Schlüssel lokal)", pass, { pass = it }, password = true)
         Field("Passphrase wiederholen", pass2, { pass2 = it }, password = true)
         var minLen by remember { mutableStateOf(vm.prefs.minPassphrase.toString()) }
         OutlinedTextField(
@@ -108,18 +128,23 @@ fun OnboardingScreen(vm: AppViewModel) {
                 if (pass != pass2) { err = "Die Passphrasen stimmen nicht überein."; return@Button }
                 busy = true
                 vm.run(onError = { err = it; busy = false }) {
-                    if (restore) {
+                    if (qrMode) {
+                        val l = qrLink ?: throw IllegalStateException("Bitte zuerst den QR-Code scannen.")
+                        vm.engine.linkFromQr(l, pass)
+                    } else if (restore) {
                         val uri = backupUri ?: throw IllegalStateException("Bitte Backup-Datei wählen.")
                         val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Datei nicht lesbar.")
                         vm.engine.linkDevice(bytes, backupPass, pass)
                     } else {
-                        vm.engine.createAccount(server, name, invite, pass)
+                        vm.engine.createAccount(normalizeServer(server), name, invite, pass)
                     }
                     busy = false
                 }
             },
-        ) { Text(if (busy) "Bitte warten …" else if (restore) "Gerät anmelden" else "Konto erstellen") }
-        TextButton(onClick = { restore = !restore }) { Text(if (restore) "Neues Konto erstellen" else "Mit Backup-Datei auf diesem Gerät anmelden") }
+        ) { Text(if (busy) "Bitte warten …" else if (restore || qrMode) "Gerät anmelden" else "Konto erstellen") }
+        if (restore || qrMode) TextButton(onClick = { restore = false; qrMode = false }) { Text("Neues Konto erstellen") }
+        if (!qrMode) TextButton(onClick = { qrMode = true; restore = false }) { Text("Per QR-Code anmelden (aus dem Webinterface)") }
+        if (!restore) TextButton(onClick = { restore = true; qrMode = false }) { Text("Mit Backup-Datei anmelden") }
     }
 }
 

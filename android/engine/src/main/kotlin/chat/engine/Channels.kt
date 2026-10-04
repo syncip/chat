@@ -30,6 +30,24 @@ import java.util.Base64
  */
 private const val KIND_CHANNEL: UByte = 3u
 private val TITLE_GID = "title".toByteArray()
+const val KEEP_AVATAR = "\u0000keep"
+private const val MAX_AVATAR = 16 * 1024
+
+/** Zerlegt einen Titel, der ggf. ein Kanalbild enthält. */
+fun splitTitle(t: String): Pair<String, String?> {
+    if (t.startsWith("{\"t\":")) {
+        runCatching {
+            val j = ChatJson.parseToJsonElement(t).jsonObject
+            val title = j["t"]!!.jsonPrimitive.content
+            val img = j["i"]?.jsonPrimitive?.content
+            return title to img?.takeIf { it.startsWith("data:image/") && it.length <= MAX_AVATAR }
+        }
+    }
+    return t to null
+}
+
+fun joinTitle(title: String, avatar: String?): String =
+    if (avatar == null) title else kotlinx.serialization.json.buildJsonObject { put("t", title); put("i", avatar) }.toString()
 
 @Serializable
 data class ChannelPolicy(
@@ -78,6 +96,8 @@ data class ChannelState(
     /** Kanalschlüssel (base64); nur im Link und lokal. */
     val key: String,
     var title: String,
+    /** Kanalbild (data-URL), Teil des verschlüsselten Titels. */
+    var avatar: String? = null,
     var policy: ChannelPolicy,
     var me: ChannelMember,
     val posts: MutableList<ChPost> = mutableListOf(),
@@ -190,7 +210,13 @@ internal class ChannelManager(
         if (o.kind == KIND_CHANNEL && o.groupId.contentEquals(gid)) o.payload else null
     } catch (e: Exception) { null }
 
-    private fun title(key: String, enc64: String): String = if (key.isEmpty()) String(enc64.unb64()) else open(key, TITLE_GID, enc64.unb64())?.let { String(it) } ?: "(unbekannt)"
+    private fun title(key: String, enc64: String): String = meta(key, enc64).first
+
+    /** Titel (und optional Kanalbild): Klartext oder `{"t":…,"i":"data:image/…"}`, bei privaten Kanälen mit dem Kanalschlüssel verschlüsselt. */
+    private fun meta(key: String, enc64: String): Pair<String, String?> {
+        val t = if (key.isEmpty()) String(enc64.unb64()) else open(key, TITLE_GID, enc64.unb64())?.let { String(it) } ?: "(unbekannt)"
+        return splitTitle(t)
+    }
 
     private fun policyOf(o: JsonObject) = ChatJson.decodeFromJsonElement(ChannelPolicy.serializer(), o)
 
@@ -207,7 +233,7 @@ internal class ChannelManager(
         val body = buildJsonObject { put("title_enc", seal(key, TITLE_GID, name.toByteArray()).b64()); put("policy", policyJson(policy)) }.toString()
         val id = ChatJson.parseToJsonElement(host.home("POST", "/v1/channels", body)).jsonObject["id"]!!.jsonPrimitive.content
         val s = host.state()
-        val c = ChannelState(id, s.me.domain, key, name, policy, ChannelMember(address = s.me.address, role = "owner", status = "active", can_write = true), createdAt = System.currentTimeMillis())
+        val c = ChannelState(id, s.me.domain, key, name, null, policy, ChannelMember(address = s.me.address, role = "owner", status = "active", can_write = true), createdAt = System.currentTimeMillis())
         channels[id] = c
         host.dirty()
         sync(id)
@@ -248,7 +274,7 @@ internal class ChannelManager(
         }.toString()
         val r = ChannelApi(http, l.s, l.c, client).call("POST", "/join", body)
         val me = ChatJson.decodeFromJsonElement(ChannelMember.serializer(), ChatJson.parseToJsonElement(r).jsonObject["me"]!!)
-        val c = ChannelState(l.c, l.s, l.k, title(l.k, info["title_enc"]!!.jsonPrimitive.content), policy, me, createdAt = System.currentTimeMillis())
+        val c = ChannelState(l.c, l.s, l.k, title(l.k, info["title_enc"]!!.jsonPrimitive.content), null, policy, me, createdAt = System.currentTimeMillis())
         channels[l.c] = c
         host.dirty()
         sync(l.c)
@@ -259,7 +285,7 @@ internal class ChannelManager(
     /** Kanal aus dem Konto-Sync übernehmen (dasselbe Konto ist serverseitig bereits Mitglied/Besitzer). */
     fun adopt(id: String, server: String, key: String, title: String, createdAt: Long) {
         if (channels.containsKey(id)) return
-        val c = ChannelState(id, server, key, title, ChannelPolicy(join_mode = "open", pow_bits = 0, isPublic = key.isEmpty()), ChannelMember(address = host.state().me.address), createdAt = createdAt)
+        val c = ChannelState(id, server, key, title, null, ChannelPolicy(join_mode = "open", pow_bits = 0, isPublic = key.isEmpty()), ChannelMember(address = host.state().me.address), createdAt = createdAt)
         channels[id] = c
         host.dirty()
         scope.launch(dispatcher) { runCatching { sync(id) } }
@@ -316,11 +342,15 @@ internal class ChannelManager(
         host.dirty()
     }
 
-    suspend fun update(id: String, title: String?, policy: ChannelPolicy) {
+    /** `avatar`: [KEEP_AVATAR] = unverändert, `""` = entfernen, sonst data-URL. */
+    suspend fun update(id: String, title: String?, policy: ChannelPolicy, avatar: String? = KEEP_AVATAR) {
         val c = channels[id]!!
+        val newAvatar = if (avatar == KEEP_AVATAR) c.avatar else avatar?.takeIf { it.isNotEmpty() }
         val body = buildJsonObject {
             put("policy", policyJson(policy))
-            if (!title.isNullOrBlank() && title != c.title) put("title_enc", seal(c.key, TITLE_GID, title.toByteArray()).b64())
+            if ((!title.isNullOrBlank() && title != c.title) || newAvatar != c.avatar) {
+                put("title_enc", seal(c.key, TITLE_GID, joinTitle(if (title.isNullOrBlank()) c.title else title, newAvatar).toByteArray()).b64())
+            }
         }.toString()
         api(c).call("PUT", "/settings", body)
         sync(id)
@@ -411,7 +441,7 @@ internal class ChannelManager(
                 }
                 c.me = ChatJson.decodeFromJsonElement(ChannelMember.serializer(), r["me"]!!)
                 c.policy = policyOf(r["policy"]!!.jsonObject)
-                c.title = title(c.key, r["title_enc"]!!.jsonPrimitive.content)
+                meta(c.key, r["title_enc"]!!.jsonPrimitive.content).let { c.title = it.first; c.avatar = it.second }
                 val entries = r["entries"]!!.jsonArray
                 for (e in entries) { ingest(c, e.jsonObject); c.cursor = e.jsonObject["seq"]!!.jsonPrimitive.content.toLong() }
                 while (c.posts.size > 1000) c.posts.removeAt(0)

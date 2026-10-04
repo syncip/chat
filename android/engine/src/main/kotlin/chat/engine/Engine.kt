@@ -169,9 +169,18 @@ class Engine(
         )
     }
 
+    /** Server vor der Registrierung prüfen (erreichbar? Registrierungsmodus?). Liefert die Server-Informationen. */
+    suspend fun probeServer(server: String): ServerInfo = op {
+        try { Api(normalizeServer(server), null, http).serverInfo() } catch (e: ChatException) { throw e } catch (e: Exception) {
+            throw ChatException("Server nicht erreichbar oder kein Chat-Server (${e.message ?: e.javaClass.simpleName}).")
+        }
+    }
+
     suspend fun createAccount(server: String, name0: String, invite: String, passphrase: String) = op {
         val name = name0.trim().lowercase()
-        val info = Api(server.trim().lowercase(), null, http).serverInfo()
+        val info = try { Api(normalizeServer(server), null, http).serverInfo() } catch (e: ChatException) { throw e } catch (e: Exception) {
+            throw ChatException("Server nicht erreichbar oder kein Chat-Server (${e.message ?: e.javaClass.simpleName}).")
+        }
         val domain = info.domain
         if (info.registration == "closed") throw ChatException("Dieser Server nimmt keine Registrierungen an.")
         val c = MlsClient.create("$name@$domain")
@@ -387,7 +396,7 @@ class Engine(
     suspend fun joinChannel(link: String, captchaToken: String? = null, captchaAnswer: String? = null): String = op { channels.join(link, captchaToken, captchaAnswer) }
     suspend fun leaveChannel(id: String) = op { channels.leave(id) }
     suspend fun deleteChannel(id: String) = op { channels.remove(id) }
-    suspend fun updateChannel(id: String, title: String?, policy: ChannelPolicy) = op { channels.update(id, title, policy) }
+    suspend fun updateChannel(id: String, title: String?, policy: ChannelPolicy, avatar: String? = KEEP_AVATAR) = op { channels.update(id, title, policy, avatar) }
     suspend fun syncChannel(id: String) = op { channels.sync(id) }
     suspend fun postToChannel(id: String, parts: List<Part>) = op { channels.post(id, parts) }
     suspend fun channelMod(id: String, action: String, target: String? = null, postId: String? = null, role: String? = null, seconds: Long? = null) =
@@ -711,6 +720,11 @@ class Engine(
             }
             is Content.Disappear -> conv.disappearSeconds = c.seconds.coerceIn(0, 365L * 86400)
             is Content.GroupName -> if (conv.kind == "group") conv.title = c.name.take(80)
+            is Content.GroupAvatar -> if (conv.kind == "group") conv.avatar = validAvatar(c.avatar)
+            is Content.Profile -> { // nur das eigene Profilbild des (MLS-authentifizierten) Absenders
+                val av = validAvatar(c.avatar)
+                if (av != null) state!!.avatars[sender] = av else state!!.avatars.remove(sender)
+            }
             is Content.Directory -> for (e in c.entries) {
                 val key = "${e.address}#${e.device}"
                 val before = conv.caps[key]?.mailbox_id
@@ -872,6 +886,35 @@ class Engine(
         val me = CapEntry(s.me.address, s.me.deviceId, s.me.domain, mb.id, mb.token, mb.key)
         val gid = conv.id.unhex()
         sendCt(conv, gid, KIND_MLS, encryptEnvelope(gid, newEnvelope(Content.Directory(listOf(me) + extra))), only)
+        // Bilder gleich mitgeben (Profilbild, Gruppenbild), damit neue Kontakte sie sofort sehen.
+        s.me.avatar?.let { sendCt(conv, gid, KIND_MLS, encryptEnvelope(gid, newEnvelope(Content.Profile(it))), only) }
+        if (conv.kind == "group") conv.avatar?.let { sendCt(conv, gid, KIND_MLS, encryptEnvelope(gid, newEnvelope(Content.GroupAvatar(it))), only) }
+    }
+
+    /** Eigenes Profilbild setzen (data-URL, null = entfernen): wird allen aktiven Chats mitgeteilt und mit den eigenen Geräten synchronisiert. */
+    suspend fun setMyAvatar(avatar: String?) = op {
+        val s = state!!
+        val av = if (avatar == null) null else validAvatar(avatar) ?: throw ChatException("Bild ungültig oder zu groß.")
+        s.me.avatar = av
+        dirty()
+        for (conv in s.conversations.values.toList()) if (conv.status == "active") runCatching { broadcast(conv, newEnvelope(Content.Profile(av))) }
+    }
+
+    /** Gruppenbild setzen (alle Mitglieder erhalten es). */
+    suspend fun setGroupAvatar(id: String, avatar: String?) = op {
+        val conv = state!!.conversations[id]
+        if (conv == null || conv.kind != "group" || conv.status != "active") throw ChatException("Nur aktive Gruppen haben ein Bild.")
+        val av = if (avatar == null) null else validAvatar(avatar) ?: throw ChatException("Bild ungültig oder zu groß.")
+        conv.avatar = av
+        broadcast(conv, newEnvelope(Content.GroupAvatar(av)))
+        dirty()
+    }
+
+    /** Bild zu einem Chat: Gruppenbild bzw. Profilbild des Gegenübers (1:1). */
+    fun avatarOfConv(s: AppState, conv: Conversation): String? {
+        if (conv.kind == "group") return conv.avatar
+        val other = conv.members.firstOrNull { it.address != s.me.address }?.address ?: return null
+        return s.avatars[other]
     }
 
     // ---------- Öffentliche Aktionen ----------
@@ -1316,6 +1359,28 @@ class Engine(
         m.parts = parts
         m.edited = true
         broadcast(conv, newEnvelope(Content.Edit(ref, parts)))
+        dirty()
+    }
+
+    /**
+     * Eigene Datei löschen: entfernt die Nachricht bzw. den Kanal-Beitrag (für alle) und löscht alle Dateien daraus vom Heimserver
+     * (der Speicher wird frei). Genau eines von [convId] / [chanId] angeben.
+     */
+    suspend fun deleteOwnFiles(msgId: String, convId: String? = null, chanId: String? = null) = op {
+        val s = state!!
+        val parts: List<Part>
+        if (chanId != null) {
+            val p = s.channels[chanId]?.posts?.find { it.id == msgId }
+            if (p == null || p.from != s.me.address) return@op
+            parts = p.parts
+            channels.mod(chanId, "delete", postId = msgId)
+        } else if (convId != null) {
+            val m = s.conversations[convId]?.messages?.find { it.id == msgId }
+            if (m == null || m.from != s.me.address) return@op
+            parts = m.parts
+            deleteMessage(convId, msgId)
+        } else return@op
+        for (p in parts) if (p is Part.File && p.blob_server == s.me.domain) runCatching { api!!.call("DELETE", "/v1/blobs/" + java.net.URLEncoder.encode(p.blob_id, "UTF-8")) }
         dirty()
     }
 

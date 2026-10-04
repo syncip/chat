@@ -270,7 +270,7 @@ function ChannelInfoDialog({ ch, onClose, onGone }: { ch: ChannelState; onClose:
   const act = (m: ChannelMember, body: object) => run(() => e.channels.mod(ch.id, { target: m.ik, ...body } as never));
   return (
     <Dialog title={ch.title} onClose={onClose} wide>
-      {isMod && <AvatarPicker name={ch.title} src={ch.avatar} channel label="Kanalbild wählen" onError={setErr} onPick={(d) => run(() => e.channels.update(ch.id, { avatar: d, policy: ch.policy }))} />}
+      {isOwner && <AvatarPicker name={ch.title} src={ch.avatar} channel label="Kanalbild wählen" onError={setErr} onPick={(d) => run(() => e.channels.update(ch.id, { avatar: d, policy: ch.policy }))} />}
       <h3>Einladungslink</h3>
       <p className="muted small">Der Link enthält den Kanalschlüssel. Wer ihn hat, kann (nach den Beitrittsregeln) lesen. Nach einer Sperre kennt die Person den Schlüssel weiterhin, der Server verweigert ihr aber Lesen und Schreiben.</p>
       <div className="row">

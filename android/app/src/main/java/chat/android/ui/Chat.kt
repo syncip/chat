@@ -115,13 +115,16 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(conv.title, maxLines = 1)
-                        val sec = convSecurity(s, conv)
-                        Text(
-                            (if (conv.kind == "group") "${conv.members.size} Mitglieder" else "Ende-zu-Ende-verschlüsselt") + " · 🔒 ${sec.second}",
-                            style = MaterialTheme.typography.bodySmall, color = levelColor(sec.first),
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AvatarImage(conv.title, vm.engine.avatarOfConv(s, conv), 36.dp)
+                        Column {
+                            Text(conv.title, maxLines = 1)
+                            val sec = convSecurity(s, conv)
+                            Text(
+                                (if (conv.kind == "group") "${conv.members.size} Mitglieder" else "Ende-zu-Ende-verschlüsselt") + " · 🔒 ${sec.second}",
+                                style = MaterialTheme.typography.bodySmall, color = levelColor(sec.first),
+                            )
+                        }
                     }
                 },
                 navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
@@ -429,6 +432,7 @@ fun ConvInfoDialog(vm: AppViewModel, s: AppState, conv: Conversation, onClose: (
         title = { Text(conv.title) },
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
+                if (conv.kind == "group") AvatarPickerRow(conv.title, conv.avatar, label = "Gruppenbild wählen", onPick = { d -> run { vm.engine.setGroupAvatar(conv.id, d) } }, onError = { err = it })
                 Text("Mitglieder", style = MaterialTheme.typography.titleSmall)
                 others.forEach { m ->
                     val c = s.contacts[m.address]

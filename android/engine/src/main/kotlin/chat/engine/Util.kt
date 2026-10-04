@@ -78,3 +78,11 @@ fun decodeCard(text: String): ContactCard {
 
 /** Fehler mit nutzerlesbarer (deutscher) Meldung. */
 open class ChatException(message: String) : Exception(message)
+
+/** Nur kleine Bilder (data-URL) zulassen. */
+fun validAvatar(a: String?): String? =
+    a?.takeIf { it.length <= 16 * 1024 && Regex("^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$").matches(it) }
+
+/** „https://chat.example.org/pfad“ → „chat.example.org“ (Schema, Pfad und Leerzeichen entfernen, kleinschreiben). */
+fun normalizeServer(input: String): String =
+    input.trim().lowercase().removePrefix("https://").removePrefix("http://").substringBefore('/').substringBefore('#').trim()

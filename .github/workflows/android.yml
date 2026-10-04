@@ -55,7 +55,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: chat-debug-apk, path: android/app/build/outputs/apk/debug/*.apk }
       # Release-APK (R8, signiert). Mit dem Repository-Secret ANDROID_KEYSTORE_B64 (+ _PASSWORD, _ALIAS) wird der eigene Schlüssel genutzt,
-      # sonst ein einmaliger Wegwerf-Schlüssel (nur zum Ausprobieren; Updates sind dann nur mit demselben Schlüssel möglich).
+      # sonst der öffentliche Test-Schlüssel aus dem Repository (gleich bleibende Signatur: Updates lassen sich installieren; nicht für den Produktivbetrieb).
       - name: Release-APK bauen
         working-directory: android
         env:
@@ -63,13 +63,70 @@ jobs:
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          KS="$RUNNER_TEMP/release.jks"
           if [ -n "$KS_B64" ]; then
-            echo "$KS_B64" | base64 -d > "$KS"; PASS="$KS_PASS"; ALIAS="$KS_ALIAS"
+            KS="$RUNNER_TEMP/release.jks"; echo "$KS_B64" | base64 -d > "$KS"
+            CHAT_KEYSTORE="$KS" CHAT_KEYSTORE_PASSWORD="$KS_PASS" CHAT_KEY_ALIAS="$KS_ALIAS" CHAT_KEY_PASSWORD="$KS_PASS" ./gradlew :app:assembleRelease
           else
-            PASS="$(openssl rand -hex 16)"; ALIAS=chat
-            keytool -genkeypair -keystore "$KS" -storepass "$PASS" -keypass "$PASS" -alias "$ALIAS" -keyalg EC -groupname secp256r1 -validity 3650 -dname "CN=Chat Test Build"
+            ./gradlew :app:assembleRelease
           fi
-          CHAT_KEYSTORE="$KS" CHAT_KEYSTORE_PASSWORD="$PASS" CHAT_KEY_ALIAS="$ALIAS" CHAT_KEY_PASSWORD="$PASS" ./gradlew :app:assembleRelease
       - uses: actions/upload-artifact@v4
         with: { name: chat-release-apk, path: android/app/build/outputs/apk/release/*.apk }
+
+  emulator:
+    name: Emulator-Tests (echte App gegen echten Server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: KVM aktivieren
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
+      - name: Server starten (für den Emulator unter 10.0.2.2:18200)
+        working-directory: server
+        run: |
+          go build -o chatd ./cmd/chatd
+          mkdir -p /tmp/chatd-data
+          CHAT_DOMAIN=10.0.2.2:18200 CHAT_LISTEN=0.0.0.0:18200 CHAT_DATA_DIR=/tmp/chatd-data CHAT_ADMIN_KEY=emulator-admin-key \
+            CHAT_RATE_PER_MINUTE=100000 CHAT_MIN_PASSPHRASE=8 nohup ./chatd > /tmp/chatd.log 2>&1 &
+          for i in $(seq 1 50); do curl -sf http://127.0.0.1:18200/v1/server-info && break; sleep 0.2; done
+      - name: SDK-Pakete installieren
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "ndk;27.2.12479018" "platforms;android-35" "build-tools;35.0.0"
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: core }
+      - run: cargo install cargo-ndk --locked
+      - name: Rust-Kern für Android bauen
+        env: { ANDROID_NDK_HOME: "/usr/local/lib/android/sdk/ndk/27.2.12479018" }
+        run: ./scripts/build-android-core.sh
+      - uses: gradle/actions/setup-gradle@v4
+      - name: App + Test-APK bauen
+        working-directory: android
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Tests auf dem Emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: android
+          script: ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.chatServer=10.0.2.2:18200 -Pandroid.testInstrumentationRunnerArguments.chatAdminKey=emulator-admin-key
+      - name: Server-Log und Test-Berichte
+        if: always()
+        run: |
+          tail -n 80 /tmp/chatd.log || true
+          find android/app/build/outputs/androidTest-results -name "*.xml" -exec grep -l "failure" {} \; -exec sed -n '1,200p' {} \; 2>/dev/null | head -300 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: emulator-test-report, path: android/app/build/reports/androidTests }

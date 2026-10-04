@@ -125,7 +125,26 @@ class Engine(
         try {
             // Wurde etwas von einem anderen Gerät übernommen, ist `before` veraltet: einen weiteren Lauf erzwingen (der dann nichts mehr ändert).
             lastSyncSig = if (accountSync.run()) "" else before
-        } catch (e: Exception) { System.err.println("sync: $e") }
+            diag = diag.copy(lastSyncAt = clock(), lastSyncError = null)
+        } catch (e: Exception) {
+            System.err.println("sync: $e")
+            diag = diag.copy(lastSyncError = "${clock()}: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    /** Verbindungs- und Abgleichsstatus für die Diagnose-Ansicht der App. */
+    data class Diagnostics(
+        val lastSyncAt: Long = 0, val lastSyncError: String? = null,
+        val lastCatchUpAt: Long = 0, val lastCatchUpError: String? = null,
+        val wsConnects: Int = 0, val lastWsError: String? = null, val lastWsReadyAt: Long = 0,
+    )
+    @Volatile var diag = Diagnostics()
+        private set
+
+    /** Alles sofort abgleichen (Ziehen zum Aktualisieren): Nachrichten nachholen, Konto-Sync, Kanäle. */
+    suspend fun refreshNow() {
+        nudge()
+        op { channels.syncAll() }
     }
 
     private fun emit() { _version.value = _version.value + 1 }
@@ -510,6 +529,7 @@ class Engine(
                         "ready" -> {
                             backoff = 1000
                             _online.value = true
+                            diag = diag.copy(wsConnects = diag.wsConnects + 1, lastWsReadyAt = clock())
                             incoming.trySend { catchUp() }
                             incoming.trySend { reconcileDevices() }
                             incoming.trySend { syncNow() }
@@ -527,7 +547,10 @@ class Engine(
                     }
                 }
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = lost()
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = lost()
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    diag = diag.copy(lastWsError = "${clock()}: ${t.message ?: t.javaClass.simpleName}" + (response?.let { " (HTTP ${it.code})" } ?: ""))
+                    lost()
+                }
                 private fun lost() {
                     _online.value = false
                     if (closed) return
@@ -539,6 +562,16 @@ class Engine(
     }
 
     private suspend fun catchUp() {
+        try {
+            catchUpInner()
+            diag = diag.copy(lastCatchUpAt = clock(), lastCatchUpError = null)
+        } catch (e: Exception) {
+            diag = diag.copy(lastCatchUpError = "${clock()}: ${e.message ?: e.javaClass.simpleName}")
+            throw e
+        }
+    }
+
+    private suspend fun catchUpInner() {
         val a = api ?: return
         val s = state ?: return
         while (true) {

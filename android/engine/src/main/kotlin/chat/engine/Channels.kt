@@ -518,6 +518,11 @@ internal class ChannelManager(
         }
     }
 
+    /** Alle Kanäle neu abgleichen (manuelles Aktualisieren). */
+    suspend fun syncAll() {
+        for (id in channels.keys.toList()) runCatching { sync(id) }
+    }
+
     fun stop() {
         for (id in sockets.keys.toList()) unwatch(id)
         retry.values.forEach { it.cancel() }

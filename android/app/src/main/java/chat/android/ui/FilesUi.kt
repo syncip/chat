@@ -73,7 +73,7 @@ fun FilesScreen(vm: AppViewModel, s: AppState, convId: String?, onBack: () -> Un
         topBar = {
             TopAppBar(
                 title = { Text(if (convId != null) "Dateien in diesem Chat" else "Alle Dateien") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
+                navigationIcon = { androidx.compose.material3.IconButton(onClick = onBack) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück") } },
             )
         },
     ) { pad ->

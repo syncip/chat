@@ -1,5 +1,23 @@
 package chat.android.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.platform.testTag
+import androidx.compose.runtime.LaunchedEffect
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,13 +58,13 @@ import chat.engine.baseUrl
 import chat.engine.normalizeServer
 
 @Composable
-fun Field(label: String, value: String, onChange: (String) -> Unit, password: Boolean = false, hint: String? = null) {
+fun Field(label: String, value: String, onChange: (String) -> Unit, password: Boolean = false, hint: String? = null, tag: String? = null) {
     OutlinedTextField(
         value = value, onValueChange = onChange, label = { Text(label) }, singleLine = true,
         placeholder = hint?.let { { Text(it) } },
         visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().let { if (tag != null) it.testTag(tag) else it },
     )
 }
 
@@ -60,91 +78,129 @@ fun TransportWarning(server: String) {
     }
 }
 
+/** Erster Start: drei klare Wege (neues Konto, per QR-Code, per Backup-Datei), danach das passende Formular. */
 @Composable
 fun OnboardingScreen(vm: AppViewModel) {
+    var mode by remember { mutableStateOf<String?>(null) } // null | register | qr | backup
+    androidx.activity.compose.BackHandler(enabled = mode != null) { mode = null }
+    if (mode == null) {
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Spacer(Modifier.height(40.dp))
+            Surface(shape = androidx.compose.foundation.shape.CircleShape, color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(96.dp)) {
+                Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Forum, null, Modifier.size(52.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+            }
+            Text("Willkommen bei Chat", style = MaterialTheme.typography.headlineMedium)
+            Text(
+                "Ende-zu-Ende-verschlüsselt, ohne Telefonnummer, auf deinem eigenen Server. Deine Schlüssel entstehen auf diesem Gerät und verlassen es nie.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = { mode = "register" }, modifier = Modifier.fillMaxWidth().height(52.dp).testTag("onb_register")) { Text("Neues Konto erstellen") }
+            OutlinedButton(onClick = { mode = "qr" }, modifier = Modifier.fillMaxWidth().height(52.dp).testTag("onb_qr")) {
+                Icon(Icons.Filled.QrCodeScanner, null); Spacer(Modifier.width(8.dp)); Text("Mit QR-Code anmelden")
+            }
+            OutlinedButton(onClick = { mode = "backup" }, modifier = Modifier.fillMaxWidth().height(52.dp).testTag("onb_backup")) {
+                Icon(Icons.Filled.Restore, null); Spacer(Modifier.width(8.dp)); Text("Mit Backup-Datei anmelden")
+            }
+            Text(
+                "QR-Code: im Webinterface oder auf einem anderen Gerät unter Einstellungen → Geräte anzeigen lassen.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        }
+    } else AccountForm(vm, mode!!, onBack = { mode = null })
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun AccountForm(vm: AppViewModel, mode: String, onBack: () -> Unit) {
     var server by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var invite by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var pass2 by remember { mutableStateOf("") }
     var backupPass by remember { mutableStateOf("") }
-    var restore by remember { mutableStateOf(false) }
-    var qrMode by remember { mutableStateOf(false) }
     var qrLink by remember { mutableStateOf<String?>(null) }
     var probe by remember { mutableStateOf("") }
+    var probeOk by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf("") }
     var backupUri by remember { mutableStateOf<Uri?>(null) }
-    val scan = rememberQrScanner("Anmelde-QR-Code aus dem Webinterface scannen") { text -> qrLink = text; err = "" }
+    val scan = rememberQrScanner("Anmelde-QR-Code scannen") { text -> qrLink = text; err = "" }
     val ctx = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { backupUri = it }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Spacer(Modifier.height(24.dp))
-        Text("Chat", style = MaterialTheme.typography.headlineLarge)
-        Text(
-            "Ende-zu-Ende-verschlüsselt. Dein Schlüssel wird auf diesem Gerät erzeugt und verlässt es nie.",
-            style = MaterialTheme.typography.bodyMedium,
+    // Server automatisch prüfen (Registrierungsmodus, Mindestlänge der Passphrase)
+    LaunchedEffect(server) {
+        probeOk = null
+        if (mode != "register" || server.isBlank()) { probe = ""; return@LaunchedEffect }
+        kotlinx.coroutines.delay(700)
+        probe = "Prüfe Server …"
+        runCatching { vm.engine.probeServer(server) }.onSuccess { i ->
+            if (i.min_passphrase > 0) vm.prefs.minPassphrase = i.min_passphrase
+            probeOk = i.registration
+            probe = "✓ ${i.domain}" + (i.app_version?.let { " · v$it" } ?: "") + " · Registrierung " + when (i.registration) { "open" -> "offen"; "invite" -> "mit Einladungscode"; else -> "geschlossen" }
+        }.onFailure { probe = "✗ ${it.message}" }
+    }
+
+    Scaffold(topBar = {
+        androidx.compose.material3.TopAppBar(
+            title = { Text(when (mode) { "register" -> "Neues Konto"; "qr" -> "Mit QR-Code anmelden"; else -> "Mit Backup anmelden" }) },
+            navigationIcon = { androidx.compose.material3.IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück") } },
         )
-        if (qrMode) {
-            Text("Öffne im Webinterface (oder in der App auf einem anderen Gerät) Einstellungen → „QR-Code anzeigen“ und scanne den Code. Er gilt 5 Minuten und nur einmal.", style = MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick = scan) { Text(if (qrLink == null) "QR-Code scannen" else "QR-Code gelesen ✓ (erneut scannen)") }
-        } else if (!restore) {
-            Field("Server", server, { server = it }, hint = "chat.example.org oder 192.168.1.10:8080")
-            TransportWarning(normalizeServer(server))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(enabled = server.isNotBlank(), onClick = {
-                    probe = "Prüfe …"
-                    vm.run(onError = { probe = "✗ $it" }) {
-                        val i = vm.engine.probeServer(server)
-                        if (i.min_passphrase > 0) vm.prefs.minPassphrase = i.min_passphrase
-                        probe = "✓ ${i.domain}" + (i.app_version?.let { " (v$it)" } ?: "") + " · Registrierung: " + when (i.registration) { "open" -> "offen"; "invite" -> "nur mit Einladungscode"; else -> "geschlossen" }
-                    }
-                }) { Text("Server prüfen") }
-                if (probe.isNotEmpty()) Text(probe, style = MaterialTheme.typography.bodySmall, color = if (probe.startsWith("✗")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
-            }
-            Field("Benutzername", name, { name = it.lowercase() })
-            Field("Einladungscode", invite, { invite = it }, hint = "nur bei Einladungs-Servern (der erste Nutzer braucht den Code aus dem Server-Log)")
-        } else {
-            OutlinedButton(onClick = { pick.launch(arrayOf("*/*")) }) { Text(if (backupUri == null) "Backup-Datei wählen" else "Datei gewählt ✓") }
-            Field("Passphrase des Backups", backupPass, { backupPass = it }, password = true)
-        }
-        Field(if (restore || qrMode) "Neue Passphrase für dieses Gerät" else "Passphrase (schützt deine Schlüssel lokal)", pass, { pass = it }, password = true)
-        Field("Passphrase wiederholen", pass2, { pass2 = it }, password = true)
-        Text("Mindestlänge der Passphrase: ${vm.prefs.minPassphrase} Zeichen (vom Betreiber des Servers festgelegt).", style = MaterialTheme.typography.bodySmall)
-        Text(
-            "Es gibt kein „Passwort vergessen“. Ohne Passphrase und ohne Backup ist dein Konto verloren.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary,
-        )
-        if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
-        Button(
-            enabled = !busy, modifier = Modifier.fillMaxWidth(),
-            onClick = {
-                err = ""
-                if (pass.length < vm.prefs.minPassphrase) { err = "Die Passphrase braucht mindestens ${vm.prefs.minPassphrase} Zeichen."; return@Button }
-                if (pass != pass2) { err = "Die Passphrasen stimmen nicht überein."; return@Button }
-                busy = true
-                vm.run(onError = { err = it; busy = false }) {
-                    if (qrMode) {
-                        val l = qrLink ?: throw IllegalStateException("Bitte zuerst den QR-Code scannen.")
-                        vm.engine.linkFromQr(l, pass)
-                    } else if (restore) {
-                        val uri = backupUri ?: throw IllegalStateException("Bitte Backup-Datei wählen.")
-                        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Datei nicht lesbar.")
-                        vm.engine.linkDevice(bytes, backupPass, pass)
-                    } else {
-                        vm.engine.createAccount(normalizeServer(server), name, invite, pass)
-                    }
-                    busy = false
+    }) { pad ->
+        Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            when (mode) {
+                "register" -> {
+                    Field("Server", server, { server = it }, hint = "chat.example.org oder 192.168.1.10:8080", tag = "reg_server")
+                    if (probe.isNotEmpty()) Text(probe, style = MaterialTheme.typography.bodySmall, color = if (probe.startsWith("✗")) MaterialTheme.colorScheme.error else levelColor(Level.Ok))
+                    TransportWarning(normalizeServer(server))
+                    Field("Benutzername", name, { name = it.lowercase().filter { c -> !c.isWhitespace() } }, tag = "reg_name")
+                    if (probeOk != "open") Field("Einladungscode", invite, { invite = it.trim() }, hint = "vom Betreiber; der erste Nutzer findet ihn im Server-Log", tag = "reg_invite")
                 }
-            },
-        ) { Text(if (busy) "Bitte warten …" else if (restore || qrMode) "Gerät anmelden" else "Konto erstellen") }
-        if (restore || qrMode) TextButton(onClick = { restore = false; qrMode = false }) { Text("Neues Konto erstellen") }
-        if (!qrMode) TextButton(onClick = { qrMode = true; restore = false }) { Text("Per QR-Code anmelden (aus dem Webinterface)") }
-        if (!restore) TextButton(onClick = { restore = true; qrMode = false }) { Text("Mit Backup-Datei anmelden") }
+                "qr" -> {
+                    Text("Öffne im Webinterface (oder in der App auf einem anderen Gerät) Einstellungen → Geräte → „QR-Code anzeigen“ und scanne ihn. Er gilt 5 Minuten und nur einmal.", style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = scan, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Filled.QrCodeScanner, null); Spacer(Modifier.width(8.dp)); Text(if (qrLink == null) "QR-Code scannen" else "QR-Code gelesen ✓ – erneut scannen") }
+                }
+                else -> {
+                    OutlinedButton(onClick = { pick.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) { Text(if (backupUri == null) "Backup-Datei wählen" else "Backup-Datei gewählt ✓") }
+                    Field("Passphrase des Backups", backupPass, { backupPass = it }, password = true)
+                }
+            }
+            Text(if (mode == "register") "Passphrase" else "Neue Passphrase für dieses Gerät", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Text("Sie verschlüsselt deine Daten auf diesem Gerät. Mindestens ${vm.prefs.minPassphrase} Zeichen (Vorgabe des Servers). Später kannst du zusätzlich eine PIN oder den Fingerabdruck einrichten.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Field("Passphrase", pass, { pass = it }, password = true, tag = "reg_pass")
+            Field("Passphrase wiederholen", pass2, { pass2 = it }, password = true, tag = "reg_pass2")
+            Text("Es gibt kein „Passwort vergessen“. Ohne Passphrase und ohne Backup ist dein Konto verloren.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+            if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
+            Button(
+                enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp).testTag("reg_submit"),
+                onClick = {
+                    err = ""
+                    if (pass.length < vm.prefs.minPassphrase) { err = "Die Passphrase braucht mindestens ${vm.prefs.minPassphrase} Zeichen."; return@Button }
+                    if (pass != pass2) { err = "Die Passphrasen stimmen nicht überein."; return@Button }
+                    busy = true
+                    vm.run(onError = { err = it; busy = false }) {
+                        when (mode) {
+                            "qr" -> vm.engine.linkFromQr(qrLink ?: throw IllegalStateException("Bitte zuerst den QR-Code scannen."), pass)
+                            "backup" -> {
+                                val uri = backupUri ?: throw IllegalStateException("Bitte Backup-Datei wählen.")
+                                val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Datei nicht lesbar.")
+                                vm.engine.linkDevice(bytes, backupPass, pass)
+                            }
+                            else -> vm.engine.createAccount(normalizeServer(server), name, invite, pass)
+                        }
+                        busy = false
+                    }
+                },
+            ) { Text(if (busy) "Bitte warten …" else if (mode == "register") "Konto erstellen" else "Gerät anmelden") }
+        }
     }
 }
 
+/** Entsperren: PIN-Tastenfeld (falls eingerichtet), Fingerabdruck/Gerätesperre, Passphrase als Rückfallebene. */
 @Composable
 fun UnlockScreen(vm: AppViewModel, activity: FragmentActivity) {
     var pass by remember { mutableStateOf("") }
@@ -152,6 +208,7 @@ fun UnlockScreen(vm: AppViewModel, activity: FragmentActivity) {
     var err by remember { mutableStateOf("") }
     val bio = remember { BiometricHelper.isEnrolled(activity) && BiometricHelper.available(activity) }
     var pinOn by remember { mutableStateOf(PinHelper.isEnrolled(activity)) }
+    var usePass by remember { mutableStateOf(!pinOn) }
     var pin by remember { mutableStateOf("") }
 
     fun unlock(p: String) {
@@ -159,31 +216,75 @@ fun UnlockScreen(vm: AppViewModel, activity: FragmentActivity) {
         err = ""
         vm.run(onError = { err = it; busy = false }) { vm.engine.unlock(p); busy = false }
     }
+    fun bioPrompt() = BiometricHelper.unlock(activity) { r -> r.onSuccess { unlock(it) }.onFailure { err = "Biometrie abgebrochen oder fehlgeschlagen." } }
+    LaunchedEffect(Unit) { if (bio) bioPrompt() }
 
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Spacer(Modifier.height(48.dp))
-        Text("Entsperren", style = MaterialTheme.typography.headlineMedium)
-        Text(vm.engine.knownAddress() ?: "", style = MaterialTheme.typography.bodyMedium)
-        Field("Passphrase", pass, { pass = it }, password = true)
-        if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
-        Button(enabled = !busy && pass.isNotEmpty(), modifier = Modifier.fillMaxWidth(), onClick = { unlock(pass) }) {
-            Text(if (busy) "Entsperre …" else "Entsperren")
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Spacer(Modifier.height(32.dp))
+        Surface(shape = androidx.compose.foundation.shape.CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(84.dp)) {
+            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Lock, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer) }
         }
-        if (bio) {
-            OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
-                BiometricHelper.unlock(activity) { r -> r.onSuccess { unlock(it) }.onFailure { err = "Biometrie fehlgeschlagen. Bitte Passphrase eingeben." } }
-            }) { Text("Mit Fingerabdruck / Gerätesperre entsperren") }
-        }
-        if (pinOn) {
-            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            OutlinedTextField(
-                value = pin, onValueChange = { pin = it.filter(Char::isDigit).take(PinHelper.MAX_LEN); err = "" }, label = { Text("App-PIN") }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        Text("Chat ist gesperrt", style = MaterialTheme.typography.headlineSmall)
+        Text(vm.engine.knownAddress() ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (busy) androidx.compose.material3.CircularProgressIndicator()
+        if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        if (pinOn && !usePass) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 8.dp).testTag("pin_dots")) {
+                repeat(maxOf(pin.length, PinHelper.MIN_LEN)) { i ->
+                    Surface(shape = androidx.compose.foundation.shape.CircleShape, color = if (i < pin.length) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.size(14.dp)) {}
+                }
+            }
+            PinPad(
+                enabled = !busy,
+                onDigit = { d -> if (pin.length < PinHelper.MAX_LEN) { pin += d; err = "" } },
+                onDelete = { pin = pin.dropLast(1) },
+                onOk = {
+                    PinHelper.unlock(activity, pin).onSuccess { pin = ""; unlock(it) }.onFailure { err = it.message ?: "PIN falsch."; pin = ""; pinOn = PinHelper.isEnrolled(activity); if (!pinOn) usePass = true }
+                },
+                okEnabled = pin.length >= PinHelper.MIN_LEN,
             )
-            OutlinedButton(enabled = !busy && pin.length >= PinHelper.MIN_LEN, modifier = Modifier.fillMaxWidth(), onClick = {
-                PinHelper.unlock(activity, pin).onSuccess { pin = ""; unlock(it) }.onFailure { err = it.message ?: "PIN falsch."; pin = ""; pinOn = PinHelper.isEnrolled(activity) }
-            }) { Text("Mit PIN entsperren") }
+            TextButton(onClick = { usePass = true }) { Text("Mit Passphrase entsperren") }
+        } else {
+            Field("Passphrase", pass, { pass = it }, password = true, tag = "unlock_pass")
+            Button(enabled = !busy && pass.isNotEmpty(), modifier = Modifier.fillMaxWidth().height(52.dp).testTag("unlock_submit"), onClick = { unlock(pass) }) {
+                Text(if (busy) "Entsperre …" else "Entsperren")
+            }
+            if (pinOn) TextButton(onClick = { usePass = false }) { Text("Mit PIN entsperren") }
+        }
+        if (bio) OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { bioPrompt() }) {
+            Icon(Icons.Filled.Fingerprint, null); Spacer(Modifier.width(8.dp)); Text("Fingerabdruck / Gerätesperre")
+        }
+    }
+}
+
+/** Ziffernfeld für die App-PIN. */
+@Composable
+private fun PinPad(enabled: Boolean, onDigit: (Char) -> Unit, onDelete: () -> Unit, onOk: () -> Unit, okEnabled: Boolean) {
+    val keys = listOf(listOf('1', '2', '3'), listOf('4', '5', '6'), listOf('7', '8', '9'), listOf('<', '0', 'k'))
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        keys.forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                row.forEach { k ->
+                    Surface(
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        color = if (k == 'k') MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(72.dp).testTag("pin_key_$k").clickable(enabled = enabled && (k != 'k' || okEnabled)) {
+                            when (k) { '<' -> onDelete(); 'k' -> onOk(); else -> onDigit(k) }
+                        },
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            when (k) {
+                                '<' -> Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = "Löschen")
+                                'k' -> Icon(Icons.Filled.Check, contentDescription = "OK", tint = MaterialTheme.colorScheme.onPrimary)
+                                else -> Text(k.toString(), style = MaterialTheme.typography.headlineSmall)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

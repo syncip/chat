@@ -65,7 +65,7 @@ private val STAT_LABELS = listOf(
 @Composable
 fun AdminScreen(vm: AppViewModel, onBack: () -> Unit) {
     var tab by remember { mutableStateOf("stats") }
-    Scaffold(topBar = { TopAppBar(title = { Text("Server-Administration") }, navigationIcon = { TextButton(onClick = onBack) { Text("←") } }) }) { pad ->
+    Scaffold(topBar = { TopAppBar(title = { Text("Server-Administration") }, navigationIcon = { androidx.compose.material3.IconButton(onClick = onBack) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück") } }) }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             Row(Modifier.horizontalScroll(rememberScrollState()).padding(12.dp, 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("stats" to "Statistik", "settings" to "Einstellungen", "users" to "Nutzer").forEach { (t, l) -> FilterChip(selected = tab == t, onClick = { tab = t }, label = { Text(l) }) }

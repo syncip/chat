@@ -1,5 +1,17 @@
 package chat.android.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.PrivacyTip
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.Icon
+import androidx.compose.ui.platform.testTag
+import androidx.compose.runtime.collectAsState
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
@@ -59,9 +71,9 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
     val ctx = LocalContext.current
     val prefs = vm.prefs
     var msg by remember { mutableStateOf("") }
-    var page by remember { mutableStateOf<String?>(null) }
+    var page by remember { mutableStateOf(vm.settingsPage.also { vm.settingsPage = null }) }
     androidx.activity.compose.BackHandler(enabled = page != null) { page = null }
-    val titles = mapOf("profile" to "Profil & Kontakt", "privacy" to "Datenschutz", "security" to "Sicherheit & Entsperren", "notify" to "Benachrichtigungen & Verbindung", "devices" to "Geräte", "server" to "Server, Speicher & Backup")
+    val titles = mapOf("profile" to "Profil & Kontakt", "privacy" to "Datenschutz", "security" to "Sicherheit & Entsperren", "notify" to "Benachrichtigungen & Verbindung", "devices" to "Geräte", "server" to "Server, Speicher & Backup", "diag" to "Verbindung & Diagnose")
     var quota by remember { mutableStateOf<Pair<Long, Long>?>(null) }
     var invite by remember { mutableStateOf("") }
     var blockUser by remember { mutableStateOf("") }
@@ -84,17 +96,25 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
     LaunchedEffect(Unit) { runCatching { quota = vm.engine.quota() }; runCatching { devices = vm.engine.listDevices() } }
     fun run(ok: String = "", f: suspend () -> Unit) { msg = ""; vm.run(onError = { msg = it }) { f(); if (ok.isNotEmpty()) msg = ok } }
 
-    Scaffold(topBar = { TopAppBar(title = { Text(titles[page] ?: "Einstellungen") }, navigationIcon = { TextButton(onClick = { if (page != null) page = null else onBack() }) { Text("←") } }) }) { pad ->
+    Scaffold(topBar = { TopAppBar(title = { Text(titles[page] ?: "Einstellungen") }, navigationIcon = { androidx.compose.material3.IconButton(onClick = { if (page != null) page = null else onBack() }) { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück") } }) }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (msg.isNotEmpty()) Text(msg, color = MaterialTheme.colorScheme.primary)
             if (page == null) {
-                Button(onClick = { run { vm.engine.lock() } }, modifier = Modifier.fillMaxWidth()) { Text("🔒 Jetzt sperren") }
-                SettingsRow("👤 Profil & Kontakt", "Profilbild, Kontaktlink, Chat-Code, QR") { page = "profile" }
-                SettingsRow("🔐 Datenschutz", "Blockieren, Netzwerk, Bestätigungen") { page = "privacy" }
-                SettingsRow("🛡 Sicherheit & Entsperren", "Fingerabdruck, PIN, automatische Sperre") { page = "security" }
-                SettingsRow("🔔 Benachrichtigungen & Verbindung", "Ton, Verbindung im Hintergrund") { page = "notify" }
-                SettingsRow("📱 Geräte", "Weitere Geräte, QR-Anmeldung") { page = "devices" }
-                SettingsRow("☁ Server, Speicher & Backup", "Speicher, Einladung, Backup, Konto") { page = "server" }
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AvatarImage(s.me.address, s.me.avatar, 64.dp)
+                    Column(Modifier.padding(start = 14.dp).weight(1f)) {
+                        Text(s.me.name, style = MaterialTheme.typography.titleLarge)
+                        Text(s.me.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                OutlinedButton(onClick = { run { vm.engine.lock() } }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Filled.Lock, null); Text("  Jetzt sperren") }
+                SettingsRow(Icons.Filled.Person, "Profil & Kontakt", "Profilbild, Kontaktlink, Chat-Code, QR", "set_profile") { page = "profile" }
+                SettingsRow(Icons.Filled.Security, "Sicherheit & Entsperren", "App-PIN, Fingerabdruck, automatische Sperre", "set_security") { page = "security" }
+                SettingsRow(Icons.Filled.PrivacyTip, "Datenschutz", "Blockieren, Netzwerk, Bestätigungen", "set_privacy") { page = "privacy" }
+                SettingsRow(Icons.Filled.Notifications, "Benachrichtigungen & Verbindung", "Ton, Verbindung im Hintergrund", "set_notify") { page = "notify" }
+                SettingsRow(Icons.Filled.Devices, "Geräte", "Weitere Geräte, QR-Anmeldung", "set_devices") { page = "devices" }
+                SettingsRow(Icons.Filled.Cloud, "Server, Speicher & Backup", "Speicher, Einladung, Backup, Konto", "set_server") { page = "server" }
+                SettingsRow(Icons.Filled.NetworkCheck, "Verbindung & Diagnose", "Status, letzter Abgleich, Fehler", "set_diag") { page = "diag" }
                 val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?" }
                 Text("Chat Android $version" + (vm.engine.info?.app_version?.let { " · Server $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -178,6 +198,9 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
             }
             Text("Mindestlänge für Passphrasen: ${prefs.minPassphrase} Zeichen (vom Server-Admin festgelegt).", style = MaterialTheme.typography.bodySmall)
             OutlinedButton(onClick = { run { vm.engine.lock() } }) { Text("🔒 Jetzt sperren") }
+            }
+            if (page == "diag") {
+                DiagnosticsSection(vm)
             }
             if (page == "server") {
             Text("Server & Speicher", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
@@ -279,12 +302,35 @@ private fun DeviceLinkSection(vm: AppViewModel, onMsg: (String) -> Unit) {
 }
 
 @Composable
-private fun SettingsRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    HorizontalDivider()
+private fun SettingsRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, tag: String, onClick: () -> Unit) {
+    androidx.compose.material3.ListItem(
+        headlineContent = { Text(title) }, supportingContent = { Text(subtitle) },
+        leadingContent = { Icon(icon, null, tint = MaterialTheme.colorScheme.primary) },
+        modifier = Modifier.clickable(onClick = onClick).testTag(tag),
+    )
+}
+
+/** Verbindungsstatus und letzte Abgleiche – hilft bei „Nachrichten/Kanäle kommen nicht an“. */
+@Composable
+private fun DiagnosticsSection(vm: AppViewModel) {
+    val online by vm.online.collectAsState()
+    var tick by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(2000); tick++ } }
+    val d = remember(tick) { vm.engine.diag }
+    fun ago(ts: Long) = if (ts <= 0) "noch nie" else "vor ${(System.currentTimeMillis() - ts) / 1000} s (" + timeOfDay(ts) + ")"
+    Text("Echtzeit-Verbindung: " + if (online) "✓ verbunden" else "✗ getrennt (versucht es automatisch erneut)", color = if (online) levelColor(Level.Ok) else MaterialTheme.colorScheme.error)
+    Text("Verbindungsaufbauten: ${d.wsConnects} · zuletzt verbunden: ${ago(d.lastWsReadyAt)}", style = MaterialTheme.typography.bodySmall)
+    d.lastWsError?.let { Text("Letzter Verbindungsfehler: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    Text("Nachrichten zuletzt abgeholt: ${ago(d.lastCatchUpAt)}", style = MaterialTheme.typography.bodySmall)
+    d.lastCatchUpError?.let { Text("Fehler beim Abholen: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    Text("Konto-Abgleich (Kanäle, Einstellungen) zuletzt: ${ago(d.lastSyncAt)}", style = MaterialTheme.typography.bodySmall)
+    d.lastSyncError?.let { Text("Fehler beim Abgleich: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    var busy by remember { mutableStateOf(false) }
+    Button(enabled = !busy, onClick = { busy = true; vm.run(onError = { busy = false; vm.showError(it) }) { vm.engine.refreshNow(); busy = false; tick++ } }) { Text(if (busy) "Gleiche ab …" else "Jetzt alles abgleichen") }
+    Text(
+        "Die App hält die Verbindung, solange sie entsperrt ist und „Verbindung im Hintergrund halten“ an ist. Android kann Apps im Hintergrund trotzdem beenden – nimm die App dafür aus der Akku-Optimierung.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** Schnell-Entsperren: Fingerabdruck/Geräte-Sperre oder eigene App-PIN, jeweils mit ausdrücklichem „Speichern“. */
@@ -311,7 +357,7 @@ private fun QuickUnlockSection(vm: AppViewModel, activity: FragmentActivity, onM
     if (!bio || !pinOn) {
         OutlinedTextField(
             value = pass, onValueChange = { pass = it; err = "" }, label = { Text("Deine Passphrase (zur Bestätigung)") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("qu_pass"),
         )
     }
     // Fingerabdruck / Geräte-Sperre
@@ -340,8 +386,8 @@ private fun QuickUnlockSection(vm: AppViewModel, activity: FragmentActivity, onM
         OutlinedButton(onClick = { PinHelper.disable(ctx); pinOn = false; onMsg("App-PIN gelöscht.") }) { Text("App-PIN löschen") }
     } else {
         val kb = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword)
-        OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(PinHelper.MAX_LEN); err = "" }, label = { Text("Neue PIN (${PinHelper.MIN_LEN}–${PinHelper.MAX_LEN} Ziffern)") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = kb, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(pin2, { pin2 = it.filter(Char::isDigit).take(PinHelper.MAX_LEN); err = "" }, label = { Text("PIN wiederholen") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = kb, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(PinHelper.MAX_LEN); err = "" }, label = { Text("Neue PIN (${PinHelper.MIN_LEN}–${PinHelper.MAX_LEN} Ziffern)") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = kb, modifier = Modifier.fillMaxWidth().testTag("qu_pin"))
+        OutlinedTextField(pin2, { pin2 = it.filter(Char::isDigit).take(PinHelper.MAX_LEN); err = "" }, label = { Text("PIN wiederholen") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = kb, modifier = Modifier.fillMaxWidth().testTag("qu_pin2"))
         Button(enabled = pass.isNotEmpty() && pin.isNotEmpty() && pin2.isNotEmpty(), onClick = {
             err = ""
             if (!PinHelper.validPin(pin)) { err = "Die PIN braucht ${PinHelper.MIN_LEN}–${PinHelper.MAX_LEN} Ziffern."; return@Button }
@@ -352,7 +398,7 @@ private fun QuickUnlockSection(vm: AppViewModel, activity: FragmentActivity, onM
                 pinOn = true; pin = ""; pin2 = ""; pass = ""
                 onMsg("App-PIN gespeichert. Nach 5 falschen Eingaben wird sie gelöscht.")
             }
-        }) { Text("App-PIN speichern") }
+        }, modifier = Modifier.testTag("qu_pin_save")) { Text("App-PIN speichern") }
     }
     if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
 }

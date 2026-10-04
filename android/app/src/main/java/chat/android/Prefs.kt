@@ -30,6 +30,11 @@ class Prefs(ctx: Context) {
         get() = p.getInt("min_pass", 8)
         set(v) = p.edit().putInt("min_pass", v.coerceIn(1, 128)).apply()
 
+    /** Angebot „Schnell-Entsperren einrichten“ wurde schon gezeigt. */
+    var quickUnlockAsked: Boolean
+        get() = p.getBoolean("quick_unlock_asked", false)
+        set(v) = p.edit().putBoolean("quick_unlock_asked", v).apply()
+
     /** Ton bei neuen Nachrichten, solange die App im Vordergrund ist (im Hintergrund entscheidet der Benachrichtigungskanal). */
     var inAppSound: Boolean
         get() = p.getBoolean("in_app_sound", true)

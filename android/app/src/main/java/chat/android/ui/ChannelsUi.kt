@@ -1,5 +1,21 @@
 package chat.android.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Timer
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.ui.platform.testTag
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -138,7 +154,7 @@ fun CreateChannelDialog(vm: AppViewModel, onClose: () -> Unit, onCreated: (Strin
                 }
                 if (isPublic) Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
                     Text(
-                        "⚠ Öffentlicher Kanal: Alle Beiträge sind unverschlüsselt und für jeden im Internet lesbar (auch ohne Konto), der Server kann alles mitlesen. Das lässt sich später nicht ändern. Schreiben dürfen weiterhin nur Mitglieder mit Konto.",
+                        "⚠ Öffentlicher Kanal: Alle Beiträge sind unverschlüsselt und für jeden im Internet lesbar (auch ohne Konto), der Server kann alles mitlesen. Du kannst das später in der Kanalinfo ändern. Schreiben dürfen weiterhin nur Mitglieder mit Konto.",
                         Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -218,22 +234,26 @@ fun JoinChannelDialog(vm: AppViewModel, onClose: () -> Unit, onJoined: (String) 
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () -> Unit) {
-    var text by remember { mutableStateOf("") }
+fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState) {
+    var text by remember(ch.id) { mutableStateOf("") }
     var codeMode by remember { mutableStateOf(false) }
     var lang by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var info by remember { mutableStateOf(false) }
-    var files by remember { mutableStateOf(listOf<android.net.Uri>()) }
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { files = files + it }
+    var attach by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<ChPost?>(null) }
+    var files by remember(ch.id) { mutableStateOf(listOf<android.net.Uri>()) }
+    val ctx = LocalContext.current
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { files = files + it }
+    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { files = files + it }
     val listState = rememberLazyListState()
     val isMod = ch.me.status == "active" && (ch.me.role == "owner" || ch.me.role == "mod")
+    val me = s.me.address
+    val posts = remember(ch.posts) { ch.posts.asReversed() }
 
     LaunchedEffect(ch.posts.size) {
-        if (ch.posts.isNotEmpty()) listState.animateScrollToItem(ch.posts.size - 1)
+        if (listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
         vm.engine.markChannelRead(ch.id)
     }
 
@@ -253,28 +273,33 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
             val atts = readAttachments(ctx, files, vm.engine.info?.limits?.max_file_size ?: Long.MAX_VALUE)
             vm.engine.postToChannel(ch.id, if (codeMode) null else text, if (codeMode) lang to text else null, atts)
             text = ""; files = emptyList(); codeMode = false; busy = false
+            listState.animateScrollToItem(0)
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = { IconButton(onClick = { vm.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück") } },
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        AvatarImage(ch.title, ch.avatar, 36.dp, square = true)
-                        Column { Text("📢 ${ch.title}", maxLines = 1); Text("${ROLE[ch.me.role] ?: ch.me.role} · ${ch.server}", style = MaterialTheme.typography.bodySmall) }
+                    Row(Modifier.clickable { vm.go(Route.ChannelInfo(ch.id)) }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AvatarImage(ch.title, ch.avatar, 40.dp, square = true)
+                        Column {
+                            Text(ch.title, maxLines = 1, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                (if (ch.policy.isPublic) "🌐 öffentlich" else "🔒 privat") + " · " + (ROLE[ch.me.role] ?: ch.me.role),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                            )
+                        }
                     }
                 },
-                navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
-                actions = { TextButton(onClick = { info = true }) { Text("ⓘ") } },
+                actions = { IconButton(onClick = { vm.go(Route.ChannelInfo(ch.id)) }) { Icon(Icons.Filled.Info, contentDescription = "Kanalinfo") } },
             )
         },
         modifier = Modifier.imePadding(),
     ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            if (ch.policy.isPublic) Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
-                Text("🌐 Öffentlicher Kanal: Inhalte sind unverschlüsselt und für jeden ohne Konto lesbar.", Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
-            }
+        Column(Modifier.padding(pad).fillMaxSize().background(LocalChatColors.current.chatBg)) {
+            if (ch.policy.isPublic) Banner("🌐 Öffentlicher Kanal: Inhalte sind unverschlüsselt und für jeden ohne Konto lesbar.", MaterialTheme.colorScheme.errorContainer)
             var pendingN by remember { mutableStateOf(0) }
             var dismissedN by remember { mutableStateOf(0) }
             LaunchedEffect(ch.id, isMod, ch.policy.join_mode, ch.events.size) {
@@ -284,97 +309,101 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
                     kotlinx.coroutines.delay(20_000)
                 }
             }
-            if (pendingN > dismissedN) Surface(color = MaterialTheme.colorScheme.tertiaryContainer, modifier = Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "👋 " + (if (pendingN == 1) "1 Person wartet" else "$pendingN Personen warten") + " auf Freigabe für diesen Kanal.",
-                        Modifier.weight(1f).clickable { info = true }.padding(vertical = 10.dp), style = MaterialTheme.typography.bodySmall,
-                    )
-                    TextButton(onClick = { info = true }) { Text("Prüfen") }
-                    TextButton(onClick = { dismissedN = pendingN }) { Text("✕") }
+            if (pendingN > dismissedN) Banner(
+                "👋 " + (if (pendingN == 1) "1 Person wartet" else "$pendingN Personen warten") + " auf Freigabe.",
+                MaterialTheme.colorScheme.tertiaryContainer, onClick = { vm.go(Route.ChannelInfo(ch.id)) },
+            ) {
+                TextButton(onClick = { vm.go(Route.ChannelInfo(ch.id)) }) { Text("Prüfen") }
+                IconButton(onClick = { dismissedN = pendingN }) { Icon(Icons.Filled.Close, contentDescription = "Ausblenden") }
+            }
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth().testTag("posts"), state = listState, reverseLayout = true,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            ) {
+                itemsIndexed(posts, key = { _, p -> p.id }) { i, p ->
+                    val older = posts.getOrNull(i + 1)
+                    val first = older == null || older.from != p.from || !sameDay(older.ts, p.ts)
+                    PostRow(vm, p, mine = p.from == me && p.hook == null, first = first, onLong = { selected = p })
+                    if (older == null || !sameDay(older.ts, p.ts)) DaySeparator(dayLabel(p.ts))
+                }
+                if (posts.isEmpty()) item {
+                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        Text("Noch keine Beiträge.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(ch.posts, key = { it.id }) { p -> PostRow(vm, ch, p, mine = p.from == s.me.address, isMod = isMod) }
-            }
-            HorizontalDivider()
             if (ch.needsKey) {
                 var newLink by remember { mutableStateOf("") }
                 var keyErr by remember { mutableStateOf("") }
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Dieser Kanal ist jetzt privat. Füge den neuen Einladungslink des Besitzers ein, um weiterzulesen.", color = MaterialTheme.colorScheme.error)
-                    OutlinedTextField(newLink, { newLink = it }, label = { Text("Neuer Einladungslink") }, modifier = Modifier.fillMaxWidth())
-                    if (keyErr.isNotEmpty()) Text(keyErr, color = MaterialTheme.colorScheme.error)
-                    Button(enabled = newLink.isNotBlank(), onClick = { vm.run(onError = { keyErr = it }) { vm.engine.rekeyChannel(ch.id, newLink); newLink = "" } }) { Text("Schlüssel übernehmen") }
+                Surface(color = MaterialTheme.colorScheme.surface) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Dieser Kanal ist jetzt privat. Füge den neuen Einladungslink des Besitzers ein, um weiterzulesen.", color = MaterialTheme.colorScheme.error)
+                        OutlinedTextField(newLink, { newLink = it }, label = { Text("Neuer Einladungslink") }, modifier = Modifier.fillMaxWidth())
+                        if (keyErr.isNotEmpty()) Text(keyErr, color = MaterialTheme.colorScheme.error)
+                        Button(enabled = newLink.isNotBlank(), onClick = { vm.run(onError = { keyErr = it }) { vm.engine.rekeyChannel(ch.id, newLink); newLink = "" } }) { Text("Schlüssel übernehmen") }
+                    }
                 }
             } else if (blocker.isNotEmpty()) {
-                Text(blocker, Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    var attachMenu by remember { mutableStateOf(false) }
-                    Box {
-                        TextButton(onClick = { attachMenu = true }, modifier = Modifier.height(52.dp)) { Text("＋", style = MaterialTheme.typography.titleLarge) }
-                        DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
-                            DropdownMenuItem(text = { Text("📎 Datei / Foto anhängen") }, onClick = { attachMenu = false; pick.launch("*/*") })
-                            DropdownMenuItem(text = { Text(if (codeMode) "</> Codeblock ausschalten" else "</> Codeblock") }, onClick = { attachMenu = false; codeMode = !codeMode })
-                        }
-                    }
-                    Column(Modifier.weight(1f)) {
-                        if (files.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            files.forEach { u -> androidx.compose.material3.FilterChip(selected = true, onClick = { files = files - u }, label = { Text(u.lastPathSegment ?: "Datei") }) }
-                        }
-                        if (codeMode) OutlinedTextField(value = lang, onValueChange = { lang = it }, placeholder = { Text("Sprache") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(
-                            value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                            minLines = 1, maxLines = 6, shape = RoundedCornerShape(26.dp),
-                            placeholder = { Text(if (codeMode) "Code …" else "Beitrag …") },
-                            textStyle = if (codeMode) MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace) else MaterialTheme.typography.bodyLarge,
-                        )
-                    }
-                    Button(
-                        enabled = !busy && (text.isNotBlank() || files.isNotEmpty()), onClick = { send() },
-                        shape = androidx.compose.foundation.shape.CircleShape, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                        modifier = Modifier.size(52.dp),
-                    ) { Text(if (busy) "…" else "➤", style = MaterialTheme.typography.titleMedium) }
+                Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
+                    Text(blocker, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                 }
+            } else {
+                ComposerBar(
+                    text = text, onText = { text = it }, placeholder = if (codeMode) "Code …" else "Beitrag",
+                    files = files, fileName = { displayName(ctx, it) }, onRemoveFile = { files = files - it },
+                    codeMode = codeMode, lang = lang, onLang = { lang = it }, busy = busy,
+                    onAttach = { attach = true }, onSend = { send() }, flags = if (codeMode) "</> Codeblock" else "",
+                )
             }
         }
     }
-    if (info) ChannelInfoDialog(vm, ch, onClose = { info = false }, onGone = { info = false; onBack() })
+    if (attach) ActionSheet("Anhängen", attachActions(
+        onMedia = { attach = false; pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
+        onFiles = { attach = false; pickFiles.launch("*/*") },
+        codeMode = codeMode, onCode = { attach = false; codeMode = !codeMode }, once = null, onOnce = {},
+    ), onDismiss = { attach = false })
+    selected?.let { p ->
+        val mine = p.from == me && p.hook == null
+        val actions = buildList {
+            val txt = p.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.body }
+            if (txt.isNotEmpty()) add(SheetAction(Icons.Filled.ContentCopy, "Kopieren", "post_copy") { selected = null; copySensitive(ctx, txt) })
+            if (!p.deleted && (mine || isMod)) add(SheetAction(Icons.Filled.Delete, "Beitrag löschen", "post_delete") {
+                selected = null; vm.run { if (mine) vm.engine.deleteOwnFiles(p.id, chanId = ch.id) else vm.engine.channelMod(ch.id, "delete", postId = p.id) }
+            })
+            if (isMod && !mine && p.hook == null) {
+                add(SheetAction(Icons.Filled.Block, "Autor sperren", "post_ban") { selected = null; vm.run { vm.engine.channelMod(ch.id, "ban", target = p.ik) } })
+                add(SheetAction(Icons.Filled.Timer, "Autor 1 Std stummschalten", "post_mute") { selected = null; vm.run { vm.engine.channelMod(ch.id, "timeout", target = p.ik, seconds = 3600) } })
+            }
+        }
+        if (actions.isEmpty()) selected = null else ActionSheet(null, actions, onDismiss = { selected = null })
+    }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun PostRow(vm: AppViewModel, ch: ChannelState, p: ChPost, mine: Boolean, isMod: Boolean) {
-    var menu by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.widthIn(max = 320.dp),
-            onClick = { if ((isMod || (mine && p.hook == null)) && !p.deleted) menu = true },
-        ) {
-            Column(Modifier.padding(10.dp, 6.dp)) {
-                Text(if (p.hook != null) "🔔 ${p.hook} (Webhook)" else p.from, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+private fun PostRow(vm: AppViewModel, p: ChPost, mine: Boolean, first: Boolean, onLong: () -> Unit) {
+    val cc = LocalChatColors.current
+    Column(Modifier.fillMaxWidth().padding(top = if (first) 6.dp else 1.dp), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+        Bubble(mine, first, Modifier.widthIn(max = 310.dp).combinedClickable(onClick = {}, onLongClick = onLong)) {
+            Column(Modifier.padding(start = 9.dp, end = 9.dp, top = 5.dp, bottom = 4.dp)) {
+                if (!mine && first) Text(
+                    if (p.hook != null) "🔔 ${p.hook} (Webhook)" else p.from.substringBefore('@'),
+                    style = MaterialTheme.typography.labelMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = senderColor(p.hook ?: p.from),
+                )
                 when {
-                    p.deleted -> Text("Beitrag entfernt", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    p.bad -> Text("Beitrag konnte nicht verifiziert werden", color = MaterialTheme.colorScheme.error)
+                    p.deleted -> Text("🚫 Beitrag entfernt", color = cc.meta)
+                    p.bad -> Text("⚠ Beitrag konnte nicht verifiziert werden", color = MaterialTheme.colorScheme.error)
                     else -> PartsView(vm, p.parts)
                 }
-                Text(java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(p.ts)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("Beitrag löschen") }, onClick = { menu = false; vm.run { if (mine) vm.engine.deleteOwnFiles(p.id, chanId = ch.id) else vm.engine.channelMod(ch.id, "delete", postId = p.id) } })
-            if (isMod && !mine && p.hook == null) {
-                DropdownMenuItem(text = { Text("Autor sperren") }, onClick = { menu = false; vm.run { vm.engine.channelMod(ch.id, "ban", target = p.ik) } })
-                DropdownMenuItem(text = { Text("Autor 1 Std stummschalten") }, onClick = { menu = false; vm.run { vm.engine.channelMod(ch.id, "timeout", target = p.ik, seconds = 3600) } })
+                Text(timeOfDay(p.ts), Modifier.align(Alignment.End), style = MaterialTheme.typography.labelSmall, color = cc.meta)
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () -> Unit, onGone: () -> Unit) {
+fun ChannelInfoScreen(vm: AppViewModel, ch: ChannelState) {
     val ctx = LocalContext.current
     val isOwner = ch.me.role == "owner"
     val isMod = isOwner || ch.me.role == "mod"
@@ -398,17 +427,30 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
     }
     fun act(m: ChannelMember, action: String, role: String? = null, seconds: Long? = null) = run { vm.engine.channelMod(ch.id, action, target = m.ik, role = role, seconds = seconds) }
 
-    AlertDialog(
-        onDismissRequest = onClose,
-        // Speichern steht immer sichtbar unten (nicht im scrollbaren Bereich)
-        confirmButton = {
-            if (dirty) Button(onClick = { run { vm.engine.updateChannel(ch.id, title, policy, makePublic = pub); saved = true } }) { Text("Speichern") }
-            else TextButton(onClick = onClose) { Text("Schließen") }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Kanalinfo") },
+                navigationIcon = { IconButton(onClick = { vm.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück") } },
+            )
         },
-        dismissButton = { if (dirty) TextButton(onClick = { title = ch.title; policy = ch.policy; pub = ch.policy.isPublic }) { Text("Verwerfen") } },
-        title = { Text(ch.title) },
-        text = {
-            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        bottomBar = {
+            if (dirty) Surface(tonalElevation = 3.dp) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Ungespeicherte Änderungen", Modifier.weight(1f), color = MaterialTheme.colorScheme.tertiary)
+                    TextButton(onClick = { title = ch.title; policy = ch.policy; pub = ch.policy.isPublic }) { Text("Verwerfen") }
+                    Button(onClick = { run { vm.engine.updateChannel(ch.id, title, policy, makePublic = pub); saved = true } }, modifier = Modifier.testTag("channel_save")) { Text("Speichern") }
+                }
+            }
+        },
+    ) { pad ->
+            Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    AvatarImage(ch.title, ch.avatar, 96.dp, square = true)
+                    Text(ch.title, style = MaterialTheme.typography.headlineSmall)
+                    Text((if (ch.policy.isPublic) "Öffentlicher Kanal" else "Privater Kanal (Ende-zu-Ende verschlüsselt)") + " · " + (ROLE[ch.me.role] ?: ch.me.role), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
                 if (isOwner) AvatarPickerRow(ch.title, ch.avatar, square = true, label = "Kanalbild wählen", onPick = { d -> run { vm.engine.updateChannel(ch.id, null, ch.policy, avatar = d ?: "") } }, onError = { err = it })
                 if (dirty) Text("Ungespeicherte Änderungen – unten „Speichern“ tippen.", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
                 else if (saved) Text("✔ Gespeichert", color = levelColor(Level.Ok), style = MaterialTheme.typography.bodySmall)
@@ -491,13 +533,12 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
                     )
                 }
                 Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (!isOwner) TextButton(onClick = { run { vm.engine.leaveChannel(ch.id) }; onGone() }) { Text("Kanal verlassen") }
-                    if (isOwner) TextButton(onClick = { run { vm.engine.deleteChannel(ch.id) }; onGone() }) { Text("Kanal löschen", color = MaterialTheme.colorScheme.error) }
+                    if (!isOwner) TextButton(onClick = { run { vm.engine.leaveChannel(ch.id) }; vm.home() }) { Text("Kanal verlassen") }
+                    if (isOwner) TextButton(onClick = { run { vm.engine.deleteChannel(ch.id) }; vm.home() }) { Text("Kanal löschen", color = MaterialTheme.colorScheme.error) }
                 }
                 if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
             }
-        },
-    )
+    }
 }
 
 /** Webhooks: Andere Apps senden per HTTP Nachrichten in den Kanal (ntfy-kompatibel, siehe docs/NTFY.md). */

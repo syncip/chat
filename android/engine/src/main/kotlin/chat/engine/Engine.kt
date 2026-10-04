@@ -137,6 +137,8 @@ class Engine(
         val lastSyncAt: Long = 0, val lastSyncError: String? = null,
         val lastCatchUpAt: Long = 0, val lastCatchUpError: String? = null,
         val wsConnects: Int = 0, val lastWsError: String? = null, val lastWsReadyAt: Long = 0,
+        /** Dauer des letzten Entsperrens nach Schritten (zur Fehlersuche). */
+        val lastUnlock: String? = null,
     )
     @Volatile var diag = Diagnostics()
         private set
@@ -320,13 +322,20 @@ class Engine(
     }
 
     suspend fun unlock(passphrase: String) = op {
+        val t0 = System.currentTimeMillis()
         val blob = try {
             store.read("vault")
         } catch (e: Exception) {
             throw ChatException("Die gespeicherten Daten auf diesem Gerät sind nicht lesbar (${e.javaClass.simpleName}). Bitte mit Backup-Datei oder QR-Code neu anmelden.")
         } ?: throw ChatException("Kein Konto vorhanden.")
+        val t1 = System.currentTimeMillis()
         openVault(passphrase, blob)
+        val t2 = System.currentTimeMillis()
         start()
+        val t3 = System.currentTimeMillis()
+        val m = "lesen ${t1 - t0} ms, entschlüsseln ${t2 - t1} ms, starten ${t3 - t2} ms (${blob.size / 1024} KiB)"
+        diag = diag.copy(lastUnlock = m)
+        System.err.println("chat: Entsperren: $m")
     }
 
     private fun openVault(passphrase: String, blob: ByteArray) {

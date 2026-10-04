@@ -324,6 +324,7 @@ private fun DiagnosticsSection(vm: AppViewModel) {
     d.lastWsError?.let { Text("Letzter Verbindungsfehler: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     Text("Nachrichten zuletzt abgeholt: ${ago(d.lastCatchUpAt)}", style = MaterialTheme.typography.bodySmall)
     d.lastCatchUpError?.let { Text("Fehler beim Abholen: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    d.lastUnlock?.let { Text("Letztes Entsperren: $it", style = MaterialTheme.typography.bodySmall) }
     Text("Konto-Abgleich (Kanäle, Einstellungen) zuletzt: ${ago(d.lastSyncAt)}", style = MaterialTheme.typography.bodySmall)
     d.lastSyncError?.let { Text("Fehler beim Abgleich: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     var busy by remember { mutableStateOf(false) }

@@ -16,8 +16,8 @@ import javax.crypto.spec.SecretKeySpec
 
 /**
  * Optionales Entsperren mit einer **App-PIN** (4–8 Ziffern), unabhängig von der Geräte-Sperre.
- * Die Passphrase wird doppelt verschlüsselt: innen mit einem aus der PIN abgeleiteten Schlüssel (PBKDF2, 310 000 Runden), außen mit einem
- * Keystore-Schlüssel (hardwaregestützt, verlässt das Gerät nicht). Nach 5 falschen Eingaben wird die PIN gelöscht; dann ist die Passphrase nötig.
+ * Die Passphrase wird doppelt verschlüsselt: innen mit einem aus der PIN abgeleiteten Schlüssel (Argon2id im nativen Kern, Bruchteile
+ * einer Sekunde; ältere Einrichtungen: PBKDF2), außen mit einem Keystore-Schlüssel (hardwaregestützt, verlässt das Gerät nicht). Nach 5 falschen Eingaben wird die PIN gelöscht; dann ist die Passphrase nötig.
  */
 object PinHelper {
     private const val ALIAS = "chat_pin_key_v1"
@@ -27,14 +27,16 @@ object PinHelper {
     const val MIN_LEN = 4
     const val MAX_LEN = 8
 
-    private fun file(ctx: Context) = File(ctx.filesDir, "pin.bin")
+    private fun file(ctx: Context) = File(ctx.filesDir, "pin.bin") // alt: PBKDF2 (langsam)
+    private fun file2(ctx: Context) = File(ctx.filesDir, "pin2.bin") // neu: Argon2id
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("chat_pin", Context.MODE_PRIVATE)
 
-    fun isEnrolled(ctx: Context): Boolean = file(ctx).exists()
+    fun isEnrolled(ctx: Context): Boolean = file2(ctx).exists() || file(ctx).exists()
     fun attemptsLeft(ctx: Context): Int = MAX_ATTEMPTS - prefs(ctx).getInt("fails", 0)
 
     fun disable(ctx: Context) {
         file(ctx).delete()
+        file2(ctx).delete()
         prefs(ctx).edit().clear().apply()
         runCatching { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS) }
     }
@@ -68,31 +70,37 @@ object PinHelper {
     /** Legt die PIN fest (die Passphrase muss vorher geprüft sein). */
     fun enable(ctx: Context, passphrase: String, pin: String) {
         require(validPin(pin)) { "Die PIN braucht $MIN_LEN–$MAX_LEN Ziffern." }
-        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-        val inner = seal(pinKey(pin, salt), passphrase.toByteArray())
-        file(ctx).writeBytes(seal(outerKey(), salt + inner))
+        val inner = chat.engine.PinVault.seal(pin, passphrase.toByteArray())
+        file2(ctx).writeBytes(seal(outerKey(), inner))
+        file(ctx).delete()
         prefs(ctx).edit().putInt("fails", 0).apply()
     }
 
     /** Liefert die Passphrase zur richtigen PIN; zählt Fehlversuche. */
     fun unlock(ctx: Context, pin: String): Result<String> {
         if (!isEnrolled(ctx)) return Result.failure(IllegalStateException("Keine PIN eingerichtet."))
+        val outer = try {
+            open(outerKey(), (if (file2(ctx).exists()) file2(ctx) else file(ctx)).readBytes())
+        } catch (e: Exception) {
+            disable(ctx)
+            return Result.failure(IllegalStateException("PIN nicht lesbar. Bitte mit der Passphrase entsperren und neu einrichten."))
+        }
         return try {
-            val plain = open(outerKey(), file(ctx).readBytes())
-            val salt = plain.copyOfRange(0, 16)
-            val pass = String(open(pinKey(pin, salt), plain.copyOfRange(16, plain.size)))
+            val pass = if (file2(ctx).exists()) {
+                String(chat.engine.PinVault.open(pin, outer))
+            } else {
+                // Alte Einrichtung (PBKDF2, auf Handys sehr langsam): einmal öffnen und auf Argon2 umstellen.
+                String(open(pinKey(pin, outer.copyOfRange(0, 16)), outer.copyOfRange(16, outer.size))).also { p -> runCatching { enable(ctx, p, pin) } }
+            }
             prefs(ctx).edit().putInt("fails", 0).apply()
             Result.success(pass)
-        } catch (e: java.security.GeneralSecurityException) {
+        } catch (e: Exception) {
             val fails = prefs(ctx).getInt("fails", 0) + 1
             prefs(ctx).edit().putInt("fails", fails).apply()
             if (fails >= MAX_ATTEMPTS) {
                 disable(ctx)
                 Result.failure(IllegalStateException("Zu viele Fehlversuche: Die PIN wurde gelöscht. Bitte mit der Passphrase entsperren."))
             } else Result.failure(IllegalStateException("Falsche PIN (noch ${MAX_ATTEMPTS - fails} Versuche)."))
-        } catch (e: Exception) {
-            disable(ctx)
-            Result.failure(IllegalStateException("PIN nicht lesbar. Bitte mit der Passphrase entsperren und neu einrichten."))
         }
     }
 }

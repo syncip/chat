@@ -189,9 +189,10 @@ wait("Sperrbildschirm mit PIN-Feld", timeout=20, rid="pin_key_2")
 ok("Sperren-Knopf sperrt die App")
 for k in APP_PIN:
     tap("PIN-Taste " + k, rid="pin_key_" + k)
+t = time.time()
 tap("OK", rid="pin_key_k")
 wait("Startseite nach PIN", timeout=60, rid="fab_add")
-ok("Entsperren per App-PIN")
+ok("Entsperren per App-PIN (%.1f s)" % (time.time() - t))
 
 # --- Sperren + Entsperren per Gerätesperre ---
 tap("Sperren-Knopf", rid="btn_lock")
@@ -208,4 +209,5 @@ device_credential()
 wait("Startseite nach Neustart", timeout=60, rid="fab_add")
 ok("Nach Neustart gesperrt und per Gerätesperre entsperrt")
 
+print("\n".join(l for l in adb("logcat", "-d", check=False).splitlines() if "Entsperren:" in l))
 print("RELEASE-APK-TEST BESTANDEN")

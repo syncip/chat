@@ -86,3 +86,10 @@ fun validAvatar(a: String?): String? =
 /** „https://chat.example.org/pfad“ → „chat.example.org“ (Schema, Pfad und Leerzeichen entfernen, kleinschreiben). */
 fun normalizeServer(input: String): String =
     input.trim().lowercase().removePrefix("https://").removePrefix("http://").substringBefore('/').substringBefore('#').trim()
+
+/** Schnelle, speicherharte Ableitung für kurze Geheimnisse (App-PIN): Argon2id im nativen Kern (19 MiB, 2 Durchläufe). */
+object PinVault {
+    fun seal(pin: String, data: ByteArray): ByteArray = uniffi.chat_core.vaultSealWith(pin, data, 19u * 1024u, 2u)
+    /** Wirft bei falscher PIN. */
+    fun open(pin: String, blob: ByteArray): ByteArray = uniffi.chat_core.vaultOpenPlain(pin, blob)
+}

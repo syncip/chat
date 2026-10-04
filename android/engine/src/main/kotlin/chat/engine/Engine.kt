@@ -1231,6 +1231,17 @@ class Engine(
         dirty()
     }
 
+    /** Gruppe umbenennen (alle Mitglieder erhalten den neuen Namen). */
+    suspend fun renameGroup(id: String, name: String) = op {
+        val conv = state!!.conversations[id] ?: return@op
+        if (conv.kind != "group" || conv.status != "active") throw ChatException("Nur aktive Gruppen lassen sich umbenennen.")
+        val n = name.trim().take(80)
+        if (n.isEmpty()) throw ChatException("Der Name darf nicht leer sein.")
+        conv.title = n
+        broadcast(conv, newEnvelope(Content.GroupName(n)))
+        dirty()
+    }
+
     suspend fun setDisappear(id: String, seconds: Long) = op {
         val conv = state!!.conversations[id] ?: return@op
         conv.disappearSeconds = seconds

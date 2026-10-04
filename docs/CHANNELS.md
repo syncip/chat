@@ -50,6 +50,12 @@ Authentifizierung für Mitglieder: `Authorization: Chan-Sig ik=<b64>,ts=,nonce=,
 
 Betreiber-Konfiguration: `CHAT_CHANNELS` (an/aus), `CHAT_MAX_CHANNELS` (je Nutzer), `CHAT_MAX_CHANNEL_MEMBERS`, `CHAT_MAX_POST_SIZE`, `CHAT_CHANNEL_RETENTION_DAYS`.
 
+## Öffentliche Kanäle (ohne Konto lesbar)
+
+Beim Erstellen lässt sich ein Kanal als **öffentlich** markieren (später nicht änderbar). Beiträge sind dann **unverschlüsselt** und für jeden lesbar, auch ohne Konto:
+Web-Lese-Link `https://server/#/c/<…>`, `GET /v1/channels/{id}/public/log` und ein Live-Feed `GET /v1/channels/{id}/public/events` (Server-Sent Events, z. B. `curl -N`).
+Die App weist an mehreren Stellen ausdrücklich darauf hin. Schreiben dürfen weiterhin nur Mitglieder mit Konto (signierte Beiträge). Webhooks siehe [NTFY.md](NTFY.md).
+
 ## Grenzen (ehrlich)
 
 - Der Server sieht Metadaten: Mitglieder (AIK + Adresse), Beitragszeiten, wer schreibt, Rollen. Inhalte sieht er nicht.

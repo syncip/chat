@@ -122,7 +122,7 @@ function ServerSettings() {
           )}
         </label>
       ))}
-      <div className="row">
+      <div className="row savebar">
         <button className="primary" disabled={!dirty} onClick={save}>Speichern</button>
         <button disabled={!dirty} onClick={() => { setSt(JSON.parse(orig)); setMsg(''); }}>Verwerfen</button>
         {dirty && <span className="warn">Ungespeicherte Änderungen</span>}

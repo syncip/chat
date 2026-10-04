@@ -138,6 +138,14 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
             }
 
             Section("Sicherheit")
+            var minLen by remember { mutableStateOf(prefs.minPassphrase.toString()) }
+            OutlinedTextField(
+                value = minLen, onValueChange = { v -> minLen = v.filter { it.isDigit() }.take(3); minLen.toIntOrNull()?.let { prefs.minPassphrase = it } },
+                label = { Text("Mindestlänge für Passphrasen") }, singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
+            )
+            var inApp by remember { mutableStateOf(prefs.inAppSound) }
+            SwitchRow("Benachrichtigungston bei neuen Nachrichten (App geöffnet)", inApp) { inApp = it; prefs.inAppSound = it }
             SwitchRow("Screenshots und Bildschirmaufnahme verhindern", secure) { secure = it; prefs.secureScreen = it; onSecureChanged() }
             SwitchRow("Verbindung im Hintergrund halten, solange entsperrt", keep) {
                 keep = it; prefs.keepConnected = it
@@ -148,7 +156,7 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
                 listOf(0, 1, 5, 15).forEach { m -> FilterChip(selected = autolock == m, onClick = { autolock = m; prefs.autoLockMinutes = m }, label = { Text(if (m == 0) "Sofort" else "$m") }) }
             }
             if (BiometricHelper.available(ctx)) {
-                SwitchRow("Mit Biometrie entsperren (Passphrase unten eintragen)", bio) { on ->
+                SwitchRow("Mit Fingerabdruck, Gesicht, PIN oder Muster entsperren (Passphrase unten eintragen; PIN/Muster ab Android 11)", bio) { on ->
                     if (on) {
                         if (backupPass.isEmpty()) { msg = "Bitte zuerst deine Passphrase unten eintragen."; return@SwitchRow }
                         run {
@@ -179,7 +187,7 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
             Text("Das Backup ist mit der Passphrase verschlüsselt und mit dem Web-Client kompatibel. Mit der Backup-Datei meldest du dich auf einem weiteren Gerät an (Multi-Device); sie enthält deinen Konto-Schlüssel und gehört nur in deine Hände.", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
-                    if (backupPass.length < 10) { msg = "Die Passphrase braucht mindestens 10 Zeichen."; return@OutlinedButton }
+                    if (backupPass.length < prefs.minPassphrase) { msg = "Die Passphrase braucht mindestens ${prefs.minPassphrase} Zeichen."; return@OutlinedButton }
                     run { pendingBackup = vm.engine.exportBackup(backupPass); save.launch("chat-backup-${s.me.name}.bak") }
                 }) { Text("Backup speichern") }
                 OutlinedButton(onClick = { run { vm.engine.lock() } }) { Text("Sperren") }

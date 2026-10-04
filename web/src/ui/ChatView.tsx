@@ -209,7 +209,7 @@ function ConvInfo({ conv, onClose, onGone }: { conv: Conversation; onClose: () =
           <option value={0}>Aus</option><option value={3600}>1 Stunde</option><option value={86400}>1 Tag</option><option value={604800}>1 Woche</option>
         </select>
       </label>
-      <div className="row">
+      <div className="row savebar">
         <button className="primary" disabled={!dirty || (conv.kind === 'group' && !name.trim())} onClick={() => run(async () => {
           if (conv.kind === 'group' && name.trim() !== conv.title) await e.renameGroup(conv.id, name);
           if (timer !== conv.disappearSeconds) await e.setDisappear(conv.id, timer);

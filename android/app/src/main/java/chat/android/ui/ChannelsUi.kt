@@ -116,11 +116,12 @@ private fun PolicyForm(p: ChannelPolicy, onChange: (ChannelPolicy) -> Unit) {
 fun CreateChannelDialog(vm: AppViewModel, onClose: () -> Unit, onCreated: (String) -> Unit) {
     var title by remember { mutableStateOf("") }
     var policy by remember { mutableStateOf(ChannelPolicy()) }
+    var isPublic by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Neuer öffentlicher Kanal") },
+        title = { Text("Neuer Kanal") },
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -128,6 +129,16 @@ fun CreateChannelDialog(vm: AppViewModel, onClose: () -> Unit, onCreated: (Strin
                     style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedTextField(value = title, onValueChange = { title = it.take(80) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = isPublic, onCheckedChange = { isPublic = it })
+                    Text("Öffentlich sichtbar – ohne Konto lesbar und verfolgbar", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                }
+                if (isPublic) Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
+                    Text(
+                        "⚠ Öffentlicher Kanal: Alle Beiträge sind unverschlüsselt und für jeden im Internet lesbar (auch ohne Konto), der Server kann alles mitlesen. Das lässt sich später nicht ändern. Schreiben dürfen weiterhin nur Mitglieder mit Konto.",
+                        Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 PolicyForm(policy) { policy = it }
                 if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
             }
@@ -135,7 +146,7 @@ fun CreateChannelDialog(vm: AppViewModel, onClose: () -> Unit, onCreated: (Strin
         confirmButton = {
             Button(enabled = !busy && title.isNotBlank(), onClick = {
                 busy = true; err = ""
-                vm.run(onError = { err = it; busy = false }) { val id = vm.engine.createChannel(title, policy); busy = false; onCreated(id) }
+                vm.run(onError = { err = it; busy = false }) { val id = vm.engine.createChannel(title, policy, isPublic); busy = false; onCreated(id) }
             }) { Text(if (busy) "…" else "Kanal erstellen") }
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Abbrechen") } },
@@ -248,6 +259,9 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
         modifier = Modifier.imePadding(),
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
+            if (ch.policy.isPublic) Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+                Text("🌐 Öffentlicher Kanal: Inhalte sind unverschlüsselt und für jeden ohne Konto lesbar.", Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+            }
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(ch.posts, key = { it.id }) { p -> PostRow(vm, ch, p, mine = p.from == s.me.address, isMod = isMod) }
             }
@@ -284,7 +298,7 @@ private fun PostRow(vm: AppViewModel, ch: ChannelState, p: ChPost, mine: Boolean
             onClick = { if (isMod && !p.deleted) menu = true },
         ) {
             Column(Modifier.padding(10.dp, 6.dp)) {
-                Text(p.from, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text(if (p.hook != null) "🔔 ${p.hook} (Webhook)" else p.from, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 when {
                     p.deleted -> Text("Beitrag entfernt", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     p.bad -> Text("Beitrag konnte nicht verifiziert werden", color = MaterialTheme.colorScheme.error)
@@ -295,7 +309,7 @@ private fun PostRow(vm: AppViewModel, ch: ChannelState, p: ChPost, mine: Boolean
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Beitrag löschen") }, onClick = { menu = false; vm.run { vm.engine.channelMod(ch.id, "delete", postId = p.id) } })
-            if (!mine) {
+            if (!mine && p.hook == null) {
                 DropdownMenuItem(text = { Text("Autor sperren") }, onClick = { menu = false; vm.run { vm.engine.channelMod(ch.id, "ban", target = p.ik) } })
                 DropdownMenuItem(text = { Text("Autor 1 Std stummschalten") }, onClick = { menu = false; vm.run { vm.engine.channelMod(ch.id, "timeout", target = p.ik, seconds = 3600) } })
             }
@@ -313,7 +327,13 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
     var title by remember { mutableStateOf(ch.title) }
     var err by remember { mutableStateOf("") }
     var linkText by remember { mutableStateOf("") }
-    LaunchedEffect(ch.id) { runCatching { linkText = vm.engine.channelLink(ch.id, baseUrl(ch.server)) } }
+    var publicLink by remember { mutableStateOf("") }
+    var saved by remember { mutableStateOf(false) }
+    val dirty = isOwner && (title != ch.title || policy.copy(isPublic = false) != ch.policy.copy(isPublic = false))
+    LaunchedEffect(ch.id) {
+        runCatching { linkText = vm.engine.channelLink(ch.id, baseUrl(ch.server)) }
+        if (ch.policy.isPublic) runCatching { publicLink = vm.engine.channelPublicLink(ch.id, baseUrl(ch.server)) }
+    }
     LaunchedEffect(ch.id, isMod) { if (isMod) runCatching { members = vm.engine.channelMembers(ch.id) } }
     fun run(f: suspend () -> Unit) {
         err = ""
@@ -323,10 +343,25 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
 
     AlertDialog(
         onDismissRequest = onClose,
-        confirmButton = { TextButton(onClick = onClose) { Text("Schließen") } },
+        // Speichern steht immer sichtbar unten (nicht im scrollbaren Bereich)
+        confirmButton = {
+            if (dirty) Button(onClick = { run { vm.engine.updateChannel(ch.id, title, policy); saved = true } }) { Text("Speichern") }
+            else TextButton(onClick = onClose) { Text("Schließen") }
+        },
+        dismissButton = { if (dirty) TextButton(onClick = { title = ch.title; policy = ch.policy }) { Text("Verwerfen") } },
         title = { Text(ch.title) },
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (dirty) Text("Ungespeicherte Änderungen – unten „Speichern“ tippen.", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
+                else if (saved) Text("✔ Gespeichert", color = levelColor(Level.Ok), style = MaterialTheme.typography.bodySmall)
+                if (ch.policy.isPublic) {
+                    Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
+                        Text("🌐 Dieser Kanal ist öffentlich: Beiträge sind unverschlüsselt und für jeden ohne Konto lesbar.", Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text("Öffentlicher Lese-Link (ohne Konto)", style = MaterialTheme.typography.labelMedium)
+                    OutlinedTextField(value = publicLink, onValueChange = {}, readOnly = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedButton(onClick = { copySensitive(ctx, publicLink) }) { Text("Lese-Link kopieren") }
+                }
                 Text("Einladungslink", style = MaterialTheme.typography.titleSmall)
                 Text(
                     "Der Link enthält den Kanalschlüssel. Nach einer Sperre kennt die Person den Schlüssel weiterhin, der Server verweigert ihr aber Lesen und Schreiben.",
@@ -343,9 +378,9 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
                 if (isOwner) {
                     Text("Einstellungen (global)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
                     OutlinedTextField(value = title, onValueChange = { title = it.take(80) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    PolicyForm(policy) { policy = it }
-                    OutlinedButton(onClick = { run { vm.engine.updateChannel(ch.id, title, policy) } }) { Text("Speichern") }
+                    PolicyForm(policy) { policy = it; saved = false }
                 }
+                if (isMod) HooksSection(vm, ch)
                 if (isMod) {
                     Text("Mitglieder", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
                     members.forEach { m ->
@@ -391,4 +426,57 @@ private fun ChannelInfoDialog(vm: AppViewModel, ch: ChannelState, onClose: () ->
             }
         },
     )
+}
+
+/** Webhooks: Andere Apps senden per HTTP Nachrichten in den Kanal (ntfy-kompatibel, siehe docs/NTFY.md). */
+@Composable
+private fun HooksSection(vm: AppViewModel, ch: ChannelState) {
+    val ctx = LocalContext.current
+    var hooks by remember { mutableStateOf<List<chat.engine.ChHook>>(emptyList()) }
+    var name by remember { mutableStateOf("") }
+    var created by remember { mutableStateOf<String?>(null) }
+    var help by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf("") }
+    LaunchedEffect(ch.id) { runCatching { hooks = vm.engine.channelHooks(ch.id) } }
+    val base = baseUrl(ch.server)
+    Text("Webhooks (ntfy-kompatibel)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+    TextButton(onClick = { help = !help }) { Text(if (help) "▾ Erklärung ausblenden" else "▸ Was ist das? So funktioniert es") }
+    if (help) {
+        Text(
+            "Mit einem Webhook können andere Programme (Skripte, Monitoring, Router, Home Assistant, CI …) per HTTP eine Benachrichtigung in diesen Kanal schicken – genau wie bei ntfy. " +
+                "Jeder Webhook hat eine eigene geheime Adresse; wer sie kennt, kann in den Kanal schreiben. Löschst du den Webhook, ist die Adresse sofort wertlos.\n\n" +
+                "curl -d \"Backup fertig\" $base/h/<TOKEN>\n" +
+                "curl -H \"Title: Nachtlauf\" -H \"Priority: high\" -H \"Tags: white_check_mark\" -d \"Alles gesichert\" $base/h/<TOKEN>\n\n" +
+                "Unterstützt: Nachricht, Title/t, Priority/p (1–5), Tags/ta, Click, als Header oder URL-Parameter, JSON-Body sowie GET …/publish, /send, /trigger. " +
+                "Nicht unterstützt: Anhänge, Aktionsknöpfe, Zeitplanung, Abonnieren über ntfy-Clients.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (ch.policy.isPublic) Text("Dieser Kanal ist öffentlich, die Nachrichten sind ohnehin lesbar.", style = MaterialTheme.typography.bodySmall)
+        else Text(
+            "⚠ Nicht öffentliche Kanäle sind Ende-zu-Ende-verschlüsselt. Damit der Server Webhook-Nachrichten verschlüsseln kann, bekommt er beim Anlegen den Kanalschlüssel. " +
+                "Der Server (und wer den Webhook-Absender kontrolliert) sieht diese Nachrichten dann im Klartext, und der Server könnte den Kanal mitlesen.",
+            color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall,
+        )
+    }
+    hooks.forEach { h ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("🔔 ${h.name}", Modifier.weight(1f))
+            TextButton(onClick = { vm.run(onError = { err = it }) { vm.engine.deleteChannelHook(ch.id, h.id); created = null; hooks = vm.engine.channelHooks(ch.id) } }) { Text("Löschen", color = MaterialTheme.colorScheme.error) }
+        }
+    }
+    if (hooks.isEmpty()) Text("Noch keine Webhooks.", style = MaterialTheme.typography.bodySmall)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedTextField(value = name, onValueChange = { name = it.take(40) }, placeholder = { Text("Name, z. B. Monitoring") }, singleLine = true, modifier = Modifier.weight(1f))
+        Button(enabled = name.isNotBlank(), onClick = { vm.run(onError = { err = it }) { created = vm.engine.createChannelHook(ch.id, name.trim()); name = ""; hooks = vm.engine.channelHooks(ch.id) } }) { Text("Anlegen") }
+    }
+    created?.let { url ->
+        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
+            Column(Modifier.padding(8.dp)) {
+                Text("Adresse jetzt kopieren – sie wird nicht wieder angezeigt:", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value = url, onValueChange = {}, readOnly = true, modifier = Modifier.fillMaxWidth())
+                OutlinedButton(onClick = { copySensitive(ctx, url) }) { Text("Kopieren") }
+            }
+        }
+    }
+    if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
 }

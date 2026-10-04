@@ -48,7 +48,7 @@ fun BackupGate(vm: AppViewModel, s: AppState) {
                         "Sie enthält deinen Konto-Schlüssel und ist mit einer Passphrase verschlüsselt. Bewahre Datei und Passphrase getrennt auf.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Field("Backup-Passphrase (mind. 10 Zeichen)", pass, { pass = it }, password = true)
+                Field("Backup-Passphrase (mind. ${vm.prefs.minPassphrase} Zeichen)", pass, { pass = it }, password = true)
                 Field("Wiederholen", pass2, { pass2 = it }, password = true)
                 if (saved) Text("Datei gespeichert ✓", color = MaterialTheme.colorScheme.primary)
                 if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
@@ -58,7 +58,7 @@ fun BackupGate(vm: AppViewModel, s: AppState) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(onClick = {
                     err = ""
-                    if (pass.length < 10) { err = "Die Passphrase braucht mindestens 10 Zeichen."; return@Button }
+                    if (pass.length < vm.prefs.minPassphrase) { err = "Die Passphrase braucht mindestens ${vm.prefs.minPassphrase} Zeichen."; return@Button }
                     if (pass != pass2) { err = "Die Passphrasen stimmen nicht überein."; return@Button }
                     vm.run(onError = { err = it }) {
                         pending = vm.engine.exportBackup(pass)

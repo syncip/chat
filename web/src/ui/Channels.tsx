@@ -278,7 +278,7 @@ function ChannelInfoDialog({ ch, onClose, onGone }: { ch: ChannelState; onClose:
           <h3>Einstellungen (global)</h3>
           <label>Name<input value={title} onChange={(x) => { setTitle(x.target.value); setSaved(false); }} maxLength={80} /></label>
           <PolicyForm p={p} onChange={(v) => { setP(v); setSaved(false); }} />
-          <div className="row">
+          <div className="row savebar">
             <button className="primary" disabled={!dirty} onClick={() => run(async () => { await e.channels.update(ch.id, { title, policy: p }); setSaved(true); })}>Speichern</button>
             <button disabled={!dirty} onClick={() => { setTitle(ch.title); setP(ch.policy); }}>Zurücksetzen</button>
             {dirty && <span className="warn">Ungespeicherte Änderungen</span>}

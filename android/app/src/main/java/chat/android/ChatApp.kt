@@ -28,7 +28,7 @@ class ChatApp : Application() {
         engine = Engine(SecureBlobStore(this), scope = appScope)
         appScope.launch { engine.init() }
         // Benachrichtigung ohne Inhalt, wenn die App nicht sichtbar ist.
-        appScope.launch { engine.newMessages.collect { if (!visible) Notifications.newMessage(this@ChatApp) } }
+        appScope.launch { engine.newMessages.collect { if (!visible) Notifications.newMessage(this@ChatApp) else if (prefs.inAppSound) Notifications.playInApp(this@ChatApp) } }
         // Hintergrunddienst folgt dem Entsperr-Zustand.
         appScope.launch {
             engine.phase.collect { p ->

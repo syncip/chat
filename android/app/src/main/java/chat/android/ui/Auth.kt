@@ -88,6 +88,13 @@ fun OnboardingScreen(vm: AppViewModel) {
         }
         Field(if (restore) "Neue Passphrase für dieses Gerät" else "Passphrase (schützt deine Schlüssel lokal)", pass, { pass = it }, password = true)
         Field("Passphrase wiederholen", pass2, { pass2 = it }, password = true)
+        var minLen by remember { mutableStateOf(vm.prefs.minPassphrase.toString()) }
+        OutlinedTextField(
+            value = minLen, onValueChange = { v -> minLen = v.filter { it.isDigit() }.take(3); minLen.toIntOrNull()?.let { vm.prefs.minPassphrase = it } },
+            label = { Text("Mindestlänge der Passphrase (auf diesem Gerät)") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
+        )
+        if ((minLen.toIntOrNull() ?: 10) < 8) Text("Sehr kurze Passphrasen sind leicht zu erraten.", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
         Text(
             "Es gibt kein „Passwort vergessen“. Ohne Passphrase und ohne Backup ist dein Konto verloren.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary,
@@ -97,7 +104,7 @@ fun OnboardingScreen(vm: AppViewModel) {
             enabled = !busy, modifier = Modifier.fillMaxWidth(),
             onClick = {
                 err = ""
-                if (pass.length < 10) { err = "Die Passphrase braucht mindestens 10 Zeichen."; return@Button }
+                if (pass.length < vm.prefs.minPassphrase) { err = "Die Passphrase braucht mindestens ${vm.prefs.minPassphrase} Zeichen."; return@Button }
                 if (pass != pass2) { err = "Die Passphrasen stimmen nicht überein."; return@Button }
                 busy = true
                 vm.run(onError = { err = it; busy = false }) {

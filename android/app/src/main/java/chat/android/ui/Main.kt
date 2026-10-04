@@ -43,6 +43,7 @@ sealed interface Screen {
     data class Channel(val id: String) : Screen
     data object Settings : Screen
     data class Files(val convId: String?) : Screen
+    data object Admin : Screen
 }
 
 @Composable
@@ -73,6 +74,8 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
     val online by vm.online.collectAsStateWithLifecycle()
     var screen by remember { mutableStateOf<Screen>(Screen.List) }
     var dialog by remember { mutableStateOf<String?>(null) } // new | group
+    var isAdmin by remember { mutableStateOf(false) }
+    LaunchedEffect(online) { if (online) isAdmin = vm.engine.isAdmin() }
     val s = state ?: return
     if (!s.backupDone) BackupGate(vm, s)
 
@@ -87,6 +90,7 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
             val ch = s.channels[sc.id]
             if (ch == null) screen = Screen.List else ChannelScreen(vm, s, ch, onBack = { screen = Screen.List })
         }
+        Screen.Admin -> AdminScreen(vm, onBack = { screen = Screen.List })
         is Screen.Files -> FilesScreen(vm, s, sc.convId, onBack = { screen = if (sc.convId != null) Screen.Chat(sc.convId) else Screen.List })
         Screen.Settings -> SettingsScreen(vm, activity, s, onBack = { screen = Screen.List }, onSecureChanged = onSecureChanged)
         Screen.List -> Scaffold(
@@ -98,6 +102,7 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
                         TextButton(onClick = { dialog = "group" }) { Text("👥") }
                         TextButton(onClick = { dialog = "channel" }) { Text("📢") }
                         TextButton(onClick = { dialog = "join" }) { Text("🔗") }
+                        if (isAdmin) TextButton(onClick = { screen = Screen.Admin }) { Text("🛠") }
                         TextButton(onClick = { screen = Screen.Files(null) }) { Text("📁") }
                         val sec = securityReport(s, online, vm.engine.info?.client_hash).first
                         TextButton(onClick = { dialog = "security" }) { Text("🛡", color = levelColor(sec)) }

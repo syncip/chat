@@ -16,16 +16,21 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Optionales Entsperren per Fingerabdruck/Gesicht. Die Passphrase wird mit einem Keystore-Schlüssel verschlüsselt,
- * der **pro Verwendung** eine starke biometrische Authentifizierung verlangt und bei neu registrierten Fingerabdrücken
- * ungültig wird. Ohne Biometrie bleibt die Passphrase unlesbar.
+ * Optionales Entsperren per Fingerabdruck/Gesicht **oder Geräte-PIN/-Muster/-Kennwort** (ab Android 11; davor nur Biometrie).
+ * Die Passphrase wird mit einem Keystore-Schlüssel verschlüsselt, der **pro Verwendung** eine Authentifizierung verlangt.
+ * Ohne erfolgreiche Authentifizierung bleibt die Passphrase unlesbar.
  */
 object BiometricHelper {
     private const val ALIAS = "chat_bio_key_v1"
     private const val TRANSFORM = "AES/GCM/NoPadding"
 
+    /** Ab Android 11 (API 30) gelten auch Geräte-PIN, -Muster und -Kennwort; davor nur starke Biometrie. */
+    private val authenticators: Int
+        get() = if (Build.VERSION.SDK_INT >= 30) BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        else BiometricManager.Authenticators.BIOMETRIC_STRONG
+
     fun available(ctx: Context): Boolean =
-        BiometricManager.from(ctx).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+        BiometricManager.from(ctx).canAuthenticate(authenticators) == BiometricManager.BIOMETRIC_SUCCESS
 
     private fun file(ctx: Context) = File(ctx.filesDir, "bio.bin")
 
@@ -44,9 +49,12 @@ object BiometricHelper {
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
             .setUserAuthenticationRequired(true)
-            .setInvalidatedByBiometricEnrollment(true)
-        if (Build.VERSION.SDK_INT >= 30) b.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
-        else @Suppress("DEPRECATION") b.setUserAuthenticationValidityDurationSeconds(-1)
+        if (Build.VERSION.SDK_INT >= 30) {
+            b.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL)
+        } else {
+            b.setInvalidatedByBiometricEnrollment(true) // neuer Fingerabdruck macht den Schlüssel ungültig
+            @Suppress("DEPRECATION") b.setUserAuthenticationValidityDurationSeconds(-1)
+        }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply { init(b.build()) }.generateKey()
     }
 
@@ -60,12 +68,12 @@ object BiometricHelper {
                 onResult(Result.failure(IllegalStateException(errString.toString())))
             }
         }
-        val info = BiometricPrompt.PromptInfo.Builder()
+        val b = BiometricPrompt.PromptInfo.Builder()
             .setTitle(title)
-            .setNegativeButtonText("Abbrechen")
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            .setAllowedAuthenticators(authenticators)
             .setConfirmationRequired(false)
-            .build()
+        if (Build.VERSION.SDK_INT < 30) b.setNegativeButtonText("Abbrechen") // mit Geräte-Anmeldedaten ist kein Abbrechen-Knopf erlaubt
+        val info = b.build()
         BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), cb).authenticate(info, BiometricPrompt.CryptoObject(cipher))
     }
 

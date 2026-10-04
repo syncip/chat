@@ -59,7 +59,7 @@ import chat.engine.Msg
 import chat.engine.Part
 import chat.engine.snippetOf
 
-private fun formatBytes(n: Long): String {
+fun formatBytes(n: Long): String {
     val u = listOf("B", "KB", "MB", "GB")
     var v = n.toDouble(); var i = 0
     while (v >= 1024 && i < u.size - 1) { v /= 1024; i++ }
@@ -411,6 +411,10 @@ fun ConvInfoDialog(vm: AppViewModel, s: AppState, conv: Conversation, onClose: (
     var add by remember { mutableStateOf("") }
     var addMenu by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(conv.title) }
+    var timer by remember { mutableStateOf(conv.disappearSeconds) }
+    var saved by remember { mutableStateOf(false) }
+    val dirty = (conv.kind == "group" && name.trim() != conv.title) || timer != conv.disappearSeconds
     val others = conv.members.filter { it.address != s.me.address }
     val candidates = s.conversations.values.filter { it.kind == "dm" && it.status == "active" }
         .mapNotNull { c -> c.members.firstOrNull { it.address != s.me.address }?.address }
@@ -423,7 +427,17 @@ fun ConvInfoDialog(vm: AppViewModel, s: AppState, conv: Conversation, onClose: (
 
     AlertDialog(
         onDismissRequest = onClose,
-        confirmButton = { TextButton(onClick = onClose) { Text("Schließen") } },
+        // Speichern steht immer sichtbar unten (nicht im scrollbaren Bereich)
+        confirmButton = {
+            if (dirty) Button(enabled = conv.kind != "group" || name.isNotBlank(), onClick = {
+                run {
+                    if (conv.kind == "group" && name.trim() != conv.title) vm.engine.renameGroup(conv.id, name)
+                    if (timer != conv.disappearSeconds) vm.engine.setDisappear(conv.id, timer)
+                    saved = true
+                }
+            }) { Text("Speichern") } else TextButton(onClick = onClose) { Text("Schließen") }
+        },
+        dismissButton = { if (dirty) TextButton(onClick = { name = conv.title; timer = conv.disappearSeconds }) { Text("Verwerfen") } },
         title = { Text(conv.title) },
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
@@ -450,12 +464,16 @@ fun ConvInfoDialog(vm: AppViewModel, s: AppState, conv: Conversation, onClose: (
                         TextButton(enabled = add.isNotEmpty(), onClick = { run { vm.engine.addMember(conv.id, add); add = "" } }) { Text("Hinzufügen") }
                     }
                 }
-                Text("Verschwindende Nachrichten", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                Text("Einstellungen", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                if (conv.kind == "group") OutlinedTextField(value = name, onValueChange = { name = it.take(80); saved = false }, label = { Text("Gruppenname") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("Verschwindende Nachrichten", style = MaterialTheme.typography.labelMedium)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(0L to "Aus", 3600L to "1 Std", 86400L to "1 Tag", 604800L to "1 Woche").forEach { (sec, label) ->
-                        FilterChip(selected = conv.disappearSeconds == sec, onClick = { run { vm.engine.setDisappear(conv.id, sec) } }, label = { Text(label) })
+                        FilterChip(selected = timer == sec, onClick = { timer = sec; saved = false }, label = { Text(label) })
                     }
                 }
+                if (dirty) Text("Ungespeicherte Änderungen – unten „Speichern“ tippen.", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
+                else if (saved) Text("✔ Gespeichert", color = levelColor(Level.Ok), style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = { run { vm.engine.rotateKeys(conv.id) } }) { Text("Schlüssel erneuern") }
                     if (conv.status == "active") TextButton(onClick = { run { vm.engine.leaveConversation(conv.id) }; onClose() }) { Text("Verlassen") }

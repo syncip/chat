@@ -15,6 +15,9 @@ Android- und iOS-Clients dieselbe API und denselben Krypto-Kern nutzen können.
 - Identität = Ed25519-Schlüsselpaar, kein Telefon/E-Mail; Login per Signatur; Registrierung per Einladung
 - **Multi-Device:** mehrere Geräte gleichzeitig pro Konto, Anmeldung neuer Geräte per Backup-Datei (Pflicht nach der Registrierung)
 - Zustell-/Lesebestätigungen (pro Nutzer einstellbar, Standard aus), Einmal-Nachrichten, einklappbarer Code
+- **Admin:** der erste Nutzer ist Administrator (Statistiken, Server-Einstellungen zur Laufzeit)
+- **Konto-Sync:** Kanäle, Einstellungen, Blocklisten und Kontakte gleichen sich zwischen Web und Android ab ([docs/SYNC.md](docs/SYNC.md))
+- **Webhooks (ntfy-kompatibel)** für Kanäle ([docs/NTFY.md](docs/NTFY.md)); **öffentliche Kanäle** ohne Konto lesbar (mit Warnhinweis)
 - **Öffentliche Kanäle** (Telegram-ähnlich, Beitritt per Link; offen/Freigabe/Proof-of-Work/Captcha, Rechte global und je Nutzer, Timeouts, Moderation), siehe [docs/CHANNELS.md](docs/CHANNELS.md)
 - **Föderation:** eigene Server betreiben, auf fremden Servern registrieren, serverübergreifend chatten
 - **Blockieren** (Nutzer/Server), Allowlist-Modus, Anfragen-Prinzip für Erstkontakte
@@ -88,6 +91,7 @@ Benötigt: Rust (+ `wasm32-unknown-unknown`, `wasm-bindgen-cli 0.2.129`), Go ≥
 | `CHAT_BLOB_RETENTION_DAYS`, `CHAT_MESSAGE_RETENTION_DAYS` | 30 | Aufbewahrung |
 | `CHAT_FEDERATION_ALLOW_PRIVATE` | `false` | Föderation mit privaten/lokalen Adressen (LAN) erlauben |
 | `CHAT_CHANNELS` / `CHAT_MAX_CHANNELS` / `CHAT_MAX_CHANNEL_MEMBERS` | an / 10 / 5000 | öffentliche Kanäle: Schalter, Kanäle je Nutzer, Mitglieder je Kanal |
+| `CHAT_MAX_HOOKS` | 5 | Webhooks je Kanal (auch zur Laufzeit vom Admin änderbar) |
 | `CHAT_TRUST_PROXY_HEADER` | – | Header mit Client-IP hinter Tunnel/Proxy (nur für Rate-Limits) |
 
 ## Dokumente
@@ -95,6 +99,8 @@ Benötigt: Rust (+ `wasm32-unknown-unknown`, `wasm-bindgen-cli 0.2.129`), Go ≥
 | Dokument | Inhalt |
 |---|---|
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Wogegen der Chat schützt und wogegen nicht |
+| [docs/NTFY.md](docs/NTFY.md) | Webhooks für Kanäle (ntfy-kompatibel), Erklärung und Sicherheit |
+| [docs/SYNC.md](docs/SYNC.md) | Konto-Sync zwischen Geräten |
 | [docs/CHANNELS.md](docs/CHANNELS.md) | Öffentliche Kanäle: Schlüssel, Rechte, Beitrittsregeln, Grenzen |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | Identität, MLS, Postfächer, Föderation, Dateien, Blockieren, Abweichungen/Offenes (§11) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Komponenten, Tech-Stack, Hosting |

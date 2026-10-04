@@ -146,7 +146,7 @@ func (s *Server) adminStats(w http.ResponseWriter, r *http.Request, u *store.Use
 	runtime.ReadMemStats(&ms)
 	writeJSON(w, 200, map[string]any{
 		"stats": st, "uptime_seconds": int64(time.Since(s.started).Seconds()), "requests_total": s.reqTotal.Load(),
-		"ws_connections": s.hub.count(), "goroutines": runtime.NumGoroutine(), "memory_bytes": ms.Alloc, "version": apiVersion,
+		"ws_connections": s.hub.count(), "goroutines": runtime.NumGoroutine(), "memory_bytes": ms.Alloc, "version": apiVersion, "app_version": AppVersion,
 		"domain": s.conf().Domain,
 	})
 }

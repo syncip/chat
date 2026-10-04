@@ -58,7 +58,7 @@ jobs:
         env:
           CHATD: ${{ github.workspace }}/server/chatd
           WEB_DIR: ${{ github.workspace }}/web/dist
-        run: node e2e.mjs && node e2e-group.mjs && node e2e-features.mjs && node e2e-multidevice.mjs && node e2e-channels.mjs && node e2e-media.mjs && node e2e-account.mjs && node e2e-passkey.mjs
+        run: node e2e.mjs && node e2e-group.mjs && node e2e-features.mjs && node e2e-multidevice.mjs && node e2e-channels.mjs && node e2e-media.mjs && node e2e-account.mjs && node e2e-passkey.mjs && node e2e-codes.mjs && node e2e-chfiles.mjs
       - name: E2E über IP:PORT (unsicherer Kontext, kein TLS)
         working-directory: e2e
         env:

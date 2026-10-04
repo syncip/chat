@@ -562,25 +562,39 @@ func (s *Server) channelMod(w http.ResponseWriter, r *http.Request, ch *store.Ch
 		return
 	}
 	actor, err := s.st.ChannelMember(ch.ID, ik)
-	if err != nil || !actor.IsMod() {
-		writeErr(w, 403, "moderator required")
+	if err != nil || actor.Status != "active" {
+		writeErr(w, 403, "member required")
 		return
 	}
 	isOwner := actor.Role == "owner"
 	var seq int64
 	if in.Action == "delete" {
-		author, err := s.st.DeletePost(ch.ID, in.PostID)
+		author, err := s.st.PostAuthor(ch.ID, in.PostID)
 		if err != nil {
 			writeErr(w, 404, "post not found")
 			return
 		}
-		if t, err := s.st.ChannelMember(ch.ID, author); err == nil && (t.Role == "owner" || (t.Role == "mod" && !isOwner)) && !bytes.Equal(author, ik) {
-			writeErr(w, 403, "cannot delete posts of this member")
+		if !bytes.Equal(author, ik) { // eigene Beiträge darf jedes Mitglied löschen, fremde nur die Moderation
+			if !actor.IsMod() {
+				writeErr(w, 403, "moderator required")
+				return
+			}
+			if t, err := s.st.ChannelMember(ch.ID, author); err == nil && (t.Role == "owner" || (t.Role == "mod" && !isOwner)) {
+				writeErr(w, 403, "cannot delete posts of this member")
+				return
+			}
+		}
+		if err := s.st.DeletePost(ch.ID, in.PostID); err != nil {
+			writeErr(w, 500, "internal error")
 			return
 		}
 		seq, _ = s.st.AppendEvent(ch.ID, "delete", ik, author, actor.Address, map[string]any{"post_id": in.PostID})
 		s.chans.publish(ch.ID, seq)
 		writeJSON(w, 200, map[string]any{"seq": seq})
+		return
+	}
+	if !actor.IsMod() {
+		writeErr(w, 403, "moderator required")
 		return
 	}
 	target, err := b64.DecodeString(in.Target)

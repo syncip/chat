@@ -27,6 +27,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import uniffi.chat_core.MlsClient
 import uniffi.chat_core.VaultSession
+import java.util.Base64
 import java.util.concurrent.Executors
 
 private const val KIND_WELCOME: UByte = 1u
@@ -213,6 +214,35 @@ class Engine(
         val plain = try { uniffi.chat_core.vaultOpenPlain(backupPass, file) } catch (e: Exception) {
             throw ChatException("Falsche Passphrase oder beschädigte Backup-Datei.")
         }
+        linkFromBackupJson(plain, newPass)
+    }
+
+    /**
+     * Gerät per QR-Code aus dem Webinterface anmelden (`chatlink1:<base64url(json {s,i,k})>`): der verschlüsselte Backup-Inhalt wird einmalig
+     * vom Home-Server abgeholt und mit dem Schlüssel aus dem QR-Code entschlüsselt (siehe web `createDeviceLink`).
+     */
+    suspend fun linkFromQr(link: String, newPass: String) = op {
+        val l = link.trim()
+        if (!l.startsWith("chatlink1:")) throw ChatException("Das ist kein Anmelde-QR-Code dieser App.")
+        val j = try {
+            ChatJson.parseToJsonElement(String(Base64.getUrlDecoder().decode(l.removePrefix("chatlink1:")))).jsonObject
+        } catch (e: Exception) { throw ChatException("QR-Code unlesbar.") }
+        val server = j["s"]?.jsonPrimitive?.content ?: throw ChatException("QR-Code unlesbar.")
+        val id = j["i"]?.jsonPrimitive?.content ?: throw ChatException("QR-Code unlesbar.")
+        val key = j["k"]?.jsonPrimitive?.content?.unb64() ?: throw ChatException("QR-Code unlesbar.")
+        val res = try {
+            Api(server, null, http).publicGet("/v1/transfer/" + java.net.URLEncoder.encode(id, "UTF-8"))
+        } catch (e: ApiException) {
+            if (e.status == 404) throw ChatException("Der QR-Code ist abgelaufen oder wurde schon benutzt. Zeige im Webinterface einen neuen an.")
+            throw e
+        }
+        val data = ChatJson.parseToJsonElement(res).jsonObject["data"]!!.jsonPrimitive.content.unb64()
+        val o = try { uniffi.chat_core.envelopeOpen(key, data) } catch (e: Exception) { throw ChatException("QR-Code ungültig.") }
+        if (o.kind != 4.toUByte()) throw ChatException("QR-Code ungültig.")
+        linkFromBackupJson(o.payload, newPass)
+    }
+
+    private suspend fun linkFromBackupJson(plain: ByteArray, newPass: String) {
         val j = ChatJson.parseToJsonElement(String(plain)).jsonObject
         if (j["v"]?.jsonPrimitive?.content != "2") throw ChatException("Dieses Backup hat ein altes Format und kann nicht verwendet werden.")
         val address = j["address"]!!.jsonPrimitive.content
@@ -288,7 +318,21 @@ class Engine(
      * Backup-Datei (Format identisch zum Web-Client): Konto-Schlüssel (AIK), Einstellungen und Kontakte, **kein MLS-Zustand**
      * (deshalb kein Zustandsfork); Verlauf und Gruppen kommen auf neuen Geräten per Aufnahme durch ein aktives Gerät.
      */
-    suspend fun exportBackup(passphrase: String): ByteArray = op {
+    suspend fun exportBackup(passphrase: String): ByteArray = op { uniffi.chat_core.vaultSeal(passphrase, backupJson().toByteArray()) }
+
+    /**
+     * QR-Code zum Anmelden eines weiteren Geräts (gleiches Format wie im Webinterface): Backup-Inhalt, mit einem Einmalschlüssel verschlüsselt,
+     * 5 Minuten einmalig beim Home-Server abrufbar; der Schlüssel steht nur im QR-Code. Liefert `chatlink1:…`.
+     */
+    suspend fun createDeviceLink(): String = op {
+        val key = uniffi.chat_core.envelopeKey()
+        val blob = uniffi.chat_core.envelopeSeal(key, 4u, "transfer".toByteArray(), ByteArray(0), backupJson().toByteArray())
+        val id = ChatJson.parseToJsonElement(api!!.call("POST", "/v1/transfer", buildJsonObject { put("data", blob.b64()) }.toString())).jsonObject["id"]!!.jsonPrimitive.content
+        val j = buildJsonObject { put("s", state!!.me.domain); put("i", id); put("k", key.b64()) }.toString()
+        "chatlink1:" + Base64.getUrlEncoder().withoutPadding().encodeToString(j.toByteArray())
+    }
+
+    private fun backupJson(): String {
         val s = state!!
         val sync = buildJsonObject {
             put("contacts", ChatJson.encodeToJsonElement(kotlinx.serialization.builtins.MapSerializer(kotlinx.serialization.serializer<String>(), Contact.serializer()), s.contacts))
@@ -304,10 +348,9 @@ class Engine(
                 s.channels.mapValues { (_, c) -> c.copy(posts = mutableListOf(), events = mutableListOf(), cursor = 0, unread = 0) },
             ))
         }
-        val json = buildJsonObject {
+        return buildJsonObject {
             put("v", 2); put("address", s.me.address); put("aik", client!!.exportIdentity().b64()); put("sync", sync)
         }.toString()
-        uniffi.chat_core.vaultSeal(passphrase, json.toByteArray())
     }
 
     /** Nach dem Speichern der Backup-Datei aufrufen (hebt die Pflicht nach der Registrierung auf). */
@@ -841,9 +884,39 @@ class Engine(
 
     fun contactLink(host: String): String = myCard()?.let { "$host/#/add/${encodeCard(it)}" } ?: ""
 
+    // ---------- Chat-Code (frei wählbarer Kurzcode für die eigene Kontaktkarte) ----------
+
+    suspend fun myChatCode(): String = op {
+        ChatJson.parseToJsonElement(api!!.call("GET", "/v1/code")).jsonObject["code"]?.jsonPrimitive?.content ?: ""
+    }
+
+    suspend fun setChatCode(code: String): String = op {
+        val card = myCard() ?: throw ChatException("Kontaktaufnahme ist deaktiviert (Einstellungen → Kontaktlink).")
+        val body = buildJsonObject { put("code", code.trim()); put("card", encodeCard(card)) }.toString()
+        ChatJson.parseToJsonElement(api!!.call("PUT", "/v1/code", body)).jsonObject["code"]!!.jsonPrimitive.content
+    }
+
+    suspend fun removeChatCode() = op { api!!.call("DELETE", "/v1/code"); Unit }
+
+    /** Löst einen Chat-Code (`code` oder `code@server`) in eine Kontaktkarte auf. */
+    suspend fun resolveChatCode(input: String): ContactCard = op {
+        val t = input.trim().lowercase()
+        val code = t.substringBefore('@')
+        val dom = if (t.contains('@')) t.substringAfter('@') else ""
+        if (!Regex("^[a-z0-9][a-z0-9_-]{2,39}$").matches(code)) throw ChatException("Ungültiger Code.")
+        val res = try {
+            api!!.call("GET", "/v1/codes/$code" + if (dom.isNotEmpty()) "?domain=" + java.net.URLEncoder.encode(dom, "UTF-8") else "")
+        } catch (e: ApiException) {
+            if (e.status == 404) throw ChatException("Diesen Code gibt es nicht.")
+            throw e
+        }
+        decodeCard(ChatJson.parseToJsonElement(res).jsonObject["card"]!!.jsonPrimitive.content)
+    }
+
     suspend fun setIntroEnabled(on: Boolean) = op {
         val s = state!!
         if (!on && s.intro != null) {
+            runCatching { api!!.call("DELETE", "/v1/code") } // ohne Intro-Postfach ist ein Code wirkungslos
             api!!.call("DELETE", "/v1/mailboxes/${s.intro!!.mailbox_id}")
             s.mailboxes.remove(s.intro!!.mailbox_id)
             s.intro = null

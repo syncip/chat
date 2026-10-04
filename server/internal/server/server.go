@@ -42,6 +42,7 @@ type Server struct {
 	nonces   *nonceCache
 	limiter  *limiter
 	userLim  *userLimits
+	xfer     *transferStore
 	fed      *federation
 	webHash  string
 	blobDir  string
@@ -58,6 +59,7 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Server, error)
 		nonces:  newNonceCache(5 * time.Minute),
 		limiter: newLimiter(cfg.RatePerMinute),
 		userLim: newUserLimits(),
+		xfer:    newTransferStore(),
 		blobDir: filepath.Join(cfg.DataDir, "blobs"),
 		stop:    make(chan struct{}),
 	}
@@ -111,6 +113,12 @@ func (s *Server) routes() {
 	// öffentlich
 	m.HandleFunc("GET /.well-known/chat-server", s.wellKnown)
 	m.HandleFunc("GET /v1/server-info", s.serverInfo)
+	m.HandleFunc("GET /v1/transfer/{id}", s.getTransfer)
+	m.HandleFunc("GET /v1/codes/{code}", s.resolveCode)
+	m.HandleFunc("GET /v1/code", s.auth(s.myCode))
+	m.HandleFunc("PUT /v1/code", s.auth(s.putCode))
+	m.HandleFunc("DELETE /v1/code", s.auth(s.deleteCode))
+	m.HandleFunc("POST /v1/transfer", s.auth(s.postTransfer))
 	m.HandleFunc("POST /v1/register", s.register)
 	m.HandleFunc("GET /v1/users/{name}", s.userInfo)
 	m.HandleFunc("GET /v1/users/{name}/keypackages", s.getKeyPackages)
@@ -254,6 +262,9 @@ func decodeJSON(w http.ResponseWriter, b []byte, v any) bool {
 	return true
 }
 
+// AppVersion: Version dieser Server-Software.
+const AppVersion = "0.2.0"
+
 func randID(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
@@ -290,6 +301,7 @@ func (s *Server) serverInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"domain":       c.Domain,
 		"version":      apiVersion,
+		"app_version":  AppVersion,
 		"registration": c.Registration,
 		"federation":   c.Federation,
 		"server_key":   b64.EncodeToString(s.key.Public().(ed25519.PublicKey)),
@@ -350,4 +362,5 @@ func (s *Server) sweep() {
 	}
 	s.nonces.sweep()
 	s.limiter.sweep()
+	s.xfer.sweep()
 }

@@ -85,7 +85,7 @@ export async function contactLink(page) {
 /** `from` startet Chat mit Besitzer des Links, `to` nimmt an. */
 export async function connect(from, to, link, fromAddr) {
   await from.getByTitle('Neuer Chat').click();
-  await from.getByPlaceholder('https://…/#/add/…').fill(link);
+  await from.getByLabel('Link oder Chat-Code').fill(link);
   await from.getByRole('button', { name: 'Chat starten' }).click();
   await to.getByText('Anfragen').waitFor({ timeout: 20000 });
   await to.locator('.requests .conv', { hasText: fromAddr }).click();
@@ -103,7 +103,7 @@ export const seen = (page, text) => page.locator('.messages p.text', { hasText: 
 /** Chat mit dem Besitzer eines Kontaktlinks starten (Gegenseite nimmt selbst an). */
 export async function connectToLink(from, link) {
   await from.getByTitle('Neuer Chat').click();
-  await from.getByPlaceholder('https://…/#/add/…').fill(link);
+  await from.getByLabel('Link oder Chat-Code').fill(link);
   await from.getByRole('button', { name: 'Chat starten' }).click();
   await from.locator('.chat-header').waitFor({ timeout: 30000 });
 }

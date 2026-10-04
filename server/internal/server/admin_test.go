@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -257,4 +258,60 @@ func TestAdminSearchBanAndRateLimit(t *testing.T) {
 	bob.call("GET", "/v1/me", nil, 429, nil)
 	admin.call("PUT", "/v1/admin/users/bob/restrict", map[string]any{}, 200, nil)
 	bob.call("GET", "/v1/me", nil, 200, nil)
+}
+
+func TestTransferOneShot(t *testing.T) {
+	n := newNode(t, nil)
+	u := n.mustUser("martin")
+	var out struct {
+		ID        string `json:"id"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	u.call("POST", "/v1/transfer", map[string]any{"data": "AAEC"}, 201, &out)
+	if len(out.ID) < 20 || out.ExpiresIn != 300 {
+		t.Fatalf("%+v", out)
+	}
+	req, _ := http.NewRequest("GET", n.ts.URL+"/v1/transfer/"+out.ID, nil)
+	var got struct{ Data string }
+	mustJSON(t, do(t, req), 200, &got)
+	if got.Data != "AAEC" {
+		t.Fatalf("%+v", got)
+	}
+	mustJSON(t, do(t, req), 404, nil) // einmalig
+	u.call("POST", "/v1/transfer", map[string]any{"data": "!!"}, 400, nil)
+	for i := 0; i < 3; i++ {
+		u.call("POST", "/v1/transfer", map[string]any{"data": "AAEC"}, 201, nil)
+	}
+	u.call("POST", "/v1/transfer", map[string]any{"data": "AAEC"}, 429, nil)
+}
+
+func TestChatCodes(t *testing.T) {
+	n := newNode(t, nil)
+	martin := n.mustUser("martin")
+	anna := n.mustUser("anna")
+	card := func(user string) string {
+		j := `{"a":"` + user + `@` + n.domain + `","d":"` + n.domain + `","m":"mbmbmbmb","t":"tktktktk","k":"kkkkkkkk"}`
+		return strings.TrimRight(base64.RawURLEncoding.EncodeToString([]byte(j)), "=")
+	}
+	martin.call("PUT", "/v1/code", map[string]any{"code": "x", "card": card("martin")}, 400, nil)
+	martin.call("PUT", "/v1/code", map[string]any{"code": "martinistcool", "card": card("anna")}, 400, nil) // fremde Karte
+	martin.call("PUT", "/v1/code", map[string]any{"code": "MartinIstCool", "card": card("martin")}, 200, nil)
+	anna.call("PUT", "/v1/code", map[string]any{"code": "martinistcool", "card": card("anna")}, 409, nil)
+	var got struct{ Card string }
+	req, _ := http.NewRequest("GET", n.ts.URL+"/v1/codes/MARTINISTCOOL", nil)
+	mustJSON(t, do(t, req), 200, &got)
+	if got.Card != card("martin") {
+		t.Fatalf("%+v", got)
+	}
+	var mine struct{ Code string }
+	martin.call("GET", "/v1/code", nil, 200, &mine)
+	if mine.Code != "martinistcool" {
+		t.Fatalf("%+v", mine)
+	}
+	// Code wechseln: alter wird frei
+	martin.call("PUT", "/v1/code", map[string]any{"code": "martin-neu", "card": card("martin")}, 200, nil)
+	anna.call("PUT", "/v1/code", map[string]any{"code": "martinistcool", "card": card("anna")}, 200, nil)
+	martin.call("DELETE", "/v1/code", nil, 200, nil)
+	req, _ = http.NewRequest("GET", n.ts.URL+"/v1/codes/martin-neu", nil)
+	mustJSON(t, do(t, req), 404, nil)
 }

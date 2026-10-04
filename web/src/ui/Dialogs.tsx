@@ -10,14 +10,16 @@ export function StartChat({ onClose, onStarted }: { onClose: () => void; onStart
   const [busy, setBusy] = useState(false);
   return (
     <Dialog title="Neuer Chat" onClose={onClose}>
-      <p className="muted small">Füge den Kontaktlink deines Gegenübers ein. Adressen allein genügen nicht: Nur wer dir seinen Link gibt, kann angeschrieben werden.</p>
-      <textarea value={link} onChange={(x) => setLink(x.target.value)} rows={4} placeholder="https://…/#/add/…" />
+      <p className="muted small">Füge den Kontaktlink deines Gegenübers ein oder gib seinen Chat-Code ein (z. B. <code>martinistcool</code>, bei anderen Servern <code>code@server</code>). Adressen allein genügen nicht: Nur wer dir Link oder Code gibt, kann angeschrieben werden.</p>
+      <textarea aria-label="Link oder Chat-Code" value={link} onChange={(x) => setLink(x.target.value)} rows={3} placeholder="Chat-Code oder https://…/#/add/…" />
       {err && <p className="error">{err}</p>}
       <button className="primary" disabled={busy || !link.trim()} onClick={async () => {
         setBusy(true);
         setErr('');
         try {
-          onStarted(await e.startChat(decodeCard(link)));
+          const t = link.trim();
+          const isCode = t.length <= 80 && /^[A-Za-z0-9][A-Za-z0-9_-]{2,39}(@[A-Za-z0-9.:-]+)?$/.test(t);
+          onStarted(await e.startChat(isCode ? await e.resolveChatCode(t) : decodeCard(link)));
         } catch (x) {
           setErr((x as Error).message);
         } finally {

@@ -316,16 +316,19 @@ func (s *Store) AppendEvent(chID, kind string, actor, target []byte, address str
 }
 
 // DeletePost löscht den Inhalt eines Beitrags (Tombstone bleibt).
-func (s *Store) DeletePost(chID, postID string) (author []byte, err error) {
-	err = s.db.QueryRow(`SELECT ik FROM channel_log WHERE channel_id=? AND post_id=? AND type='post'`, chID, postID).Scan(&author)
+// PostAuthor liefert den Autor (AIK) eines nicht gelöschten Beitrags.
+func (s *Store) PostAuthor(chID, postID string) ([]byte, error) {
+	var author []byte
+	err := s.db.QueryRow(`SELECT ik FROM channel_log WHERE channel_id=? AND post_id=? AND type='post' AND deleted=0`, chID, postID).Scan(&author)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	if err != nil {
-		return nil, err
-	}
-	_, err = s.db.Exec(`UPDATE channel_log SET deleted=1, data=NULL, sig=NULL WHERE channel_id=? AND post_id=?`, chID, postID)
 	return author, err
+}
+
+func (s *Store) DeletePost(chID, postID string) error {
+	_, err := s.db.Exec(`UPDATE channel_log SET deleted=1, data=NULL, sig=NULL WHERE channel_id=? AND post_id=?`, chID, postID)
+	return err
 }
 
 func (s *Store) ChannelLog(chID string, after int64, limit int) ([]LogEntry, error) {

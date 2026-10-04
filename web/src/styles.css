@@ -163,3 +163,6 @@ code { background: color-mix(in srgb, var(--text) 8%, transparent); padding: 0 4
 .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
 .stat-v { font-size: 20px; font-weight: 700; }
 .savebar { position: sticky; bottom: -20px; background: var(--panel); padding: 10px 0; border-top: 1px solid var(--line); z-index: 2; margin-top: 8px; }
+
+.qr { width: min(280px, 70vw); margin: 8px 0; background: #fff; border-radius: 8px; padding: 4px; }
+.qr svg { display: block; width: 100%; height: auto; }

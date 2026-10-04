@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { DeviceInfo } from '../lib/types';
 import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
+import { QrCode } from './QrCode';
 import { enrollPasskey, hasPasskey, passkeySupported, removePasskey } from '../lib/passkey';
 import { minPassLength, setMinPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, idleLockMinutes, setIdleLockMinutes, type RememberMode } from '../lib/prefs';
 import { soundEnabled, setSoundEnabled, playNotify } from '../lib/sound';
@@ -77,8 +78,9 @@ export function Settings({ onClose }: { onClose: () => void }) {
             <div className="row">
               <button onClick={() => run(() => copyText(link), 'Link kopiert.')}>Kopieren</button>
               <button onClick={() => run(() => e.setIntroEnabled(false), 'Kontaktlink deaktiviert (nur noch bestehende Kontakte).')}>Deaktivieren</button>
-              <button onClick={() => run(async () => { await e.setIntroEnabled(false); await e.setIntroEnabled(true); }, 'Neuer Link erzeugt, der alte ist ungültig.')}>Neu erzeugen</button>
+              <button onClick={() => run(async () => { await e.setIntroEnabled(false); await e.setIntroEnabled(true); }, 'Neuer Link erzeugt, der alte ist ungültig (ein Chat-Code muss danach neu gespeichert werden).')}>Neu erzeugen</button>
             </div>
+            <ChatCodeSection link={link} />
           </>
         ) : (
           <>
@@ -143,6 +145,8 @@ export function Settings({ onClose }: { onClose: () => void }) {
         </div>
       </section>
 
+      <p className="muted small">Chat Web {__APP_VERSION__}{(e.info as { app_version?: string } | undefined)?.app_version ? ` · Server ${(e.info as { app_version?: string }).app_version}` : ''}</p>
+
       <section>
         <h3>Geräte</h3>
         <p className="muted small">Dein Konto kann auf mehreren Geräten gleichzeitig aktiv sein. Ein neues Gerät meldest du mit der Backup-Datei an; ein aktives Gerät nimmt es dann in deine Chats auf.</p>
@@ -154,6 +158,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
             </li>
           ))}
         </ul>
+        <DeviceLinkSection />
       </section>
 
       <section>
@@ -213,6 +218,69 @@ function PasskeySection({ setMsg }: { setMsg: (m: string) => void }) {
             } catch (x) { setErr((x as Error).message); }
           }}>Passkey einrichten</button>
         </div>
+      )}
+      {err && <p className="error" role="alert">{err}</p>}
+    </div>
+  );
+}
+
+function ChatCodeSection({ link }: { link: string }) {
+  const e = useEngine();
+  const [code, setCode] = useState('');
+  const [saved, setSaved] = useState('');
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [qr, setQr] = useState(false);
+  useEffect(() => { e.myChatCode().then((c) => { setSaved(c); setCode(c); }).catch(() => undefined); }, [e]);
+  return (
+    <div>
+      <strong>Mein Chat-Code &amp; QR-Code</strong>
+      <p className="muted small">Wähle einen Code (3–40 Zeichen: a–z, 0–9, _ und -). Wer ihn bei „Neuer Chat“ eingibt, landet bei dir. Der Code ist öffentlich auflösbar: wer ihn errät, kann dir eine Chat-Anfrage schicken (du entscheidest, ob du sie annimmst). Wähle ihn deshalb nicht zu einfach, wenn du Anfragen von Fremden vermeiden willst.</p>
+      <div className="row">
+        <input aria-label="Chat-Code" value={code} placeholder="z. B. martinistcool" onChange={(x) => setCode(x.target.value.toLowerCase())} />
+        <button disabled={!code || code === saved} onClick={async () => {
+          setErr(''); setMsg('');
+          try { const c = await e.setChatCode(code); setSaved(c); setCode(c); setMsg(`Chat-Code „${c}“ gespeichert.`); } catch (x) { setErr((x as Error).message); }
+        }}>Code speichern</button>
+        {saved && <button onClick={async () => { await e.removeChatCode(); setSaved(''); setCode(''); setMsg('Chat-Code entfernt.'); }}>Entfernen</button>}
+      </div>
+      {link && <button onClick={() => setQr(!qr)}>{qr ? 'QR-Code ausblenden' : 'Meinen Kontakt-QR-Code anzeigen'}</button>}
+      {qr && link && <QrCode text={link} label="QR-Code deines Kontaktlinks" />}
+      {msg && <p className="ok" role="status">{msg}</p>}
+      {err && <p className="error" role="alert">{err}</p>}
+    </div>
+  );
+}
+
+function DeviceLinkSection() {
+  const e = useEngine();
+  const [link, setLink] = useState<{ link: string; until: number } | null>(null);
+  const [left, setLeft] = useState(0);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (!link) return;
+    const t = setInterval(() => {
+      const l = Math.max(0, Math.round((link.until - Date.now()) / 1000));
+      setLeft(l);
+      if (l === 0) setLink(null);
+    }, 500);
+    return () => clearInterval(t);
+  }, [link]);
+  return (
+    <div>
+      <strong>Android-Gerät per QR-Code anmelden</strong>
+      <p className="muted small">Öffne in der Android-App „Per QR-Code anmelden“ und scanne den Code. Er enthält einen Einmalschlüssel, gilt 5 Minuten und nur einmal. Zeige ihn niemandem und mache kein Foto davon: Wer ihn scannt, kann dein Konto auf einem Gerät hinzufügen (du siehst es danach in der Geräteliste und kannst es widerrufen).</p>
+      {link ? (
+        <>
+          <QrCode text={link.link} label="QR-Code zum Anmelden eines Geräts" />
+          <p className="muted small" role="status">Gültig noch {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')} Minuten</p>
+          <button onClick={() => setLink(null)}>Code ausblenden</button>
+        </>
+      ) : (
+        <button onClick={async () => {
+          setErr('');
+          try { const r = await e.createDeviceLink(); setLink({ link: r.link, until: Date.now() + r.expiresIn * 1000 }); setLeft(r.expiresIn); } catch (x) { setErr((x as Error).message); }
+        }}>QR-Code anzeigen</button>
       )}
       {err && <p className="error" role="alert">{err}</p>}
     </div>

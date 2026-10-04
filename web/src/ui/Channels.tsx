@@ -241,9 +241,9 @@ function PostView({ ch, p, isMod, onErr }: { ch: ChannelState; p: ChPost; isMod:
         {p.deleted ? <em className="muted">Beitrag entfernt</em> : p.bad ? <em className="error">Beitrag konnte nicht verifiziert werden</em> : <Parts parts={p.parts} />}
         <div className="meta">
           <span className="muted small">{new Date(p.ts).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
-          {isMod && !p.deleted && (
+          {(isMod || (mine && !p.hook)) && !p.deleted && (
             <>
-              <button className="link small" onClick={() => run(() => e.channels.mod(ch.id, { action: 'delete', post_id: p.id }))}>Löschen</button>
+              <button className="link small" onClick={() => run(() => (mine ? e.deleteOwnFiles({ chanId: ch.id, msgId: p.id }) : e.channels.mod(ch.id, { action: 'delete', post_id: p.id })))}>Löschen</button>
               {!mine && !p.hook && <button className="link small" onClick={() => run(() => e.channels.mod(ch.id, { action: 'ban', target: p.ik }))}>Sperren</button>}
               {!mine && !p.hook && <button className="link small" onClick={() => run(() => e.channels.mod(ch.id, { action: 'timeout', target: p.ik, seconds: 3600 }))}>1 Std stumm</button>}
             </>

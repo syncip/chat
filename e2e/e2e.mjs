@@ -30,7 +30,7 @@ try {
 
   // Bob startet den Chat (Server B → Server A)
   await bob.getByTitle('Neuer Chat').click();
-  await bob.getByPlaceholder('https://…/#/add/…').fill(link);
+  await bob.getByLabel('Link oder Chat-Code').fill(link);
   await bob.getByRole('button', { name: 'Chat starten' }).click();
   await bob.locator('.conv .title', { hasText: `alice@${H}:18080` }).waitFor({ timeout: 20000 });
   console.log('✔ Bob startet Chat mit Alice (über Server-Grenze)');

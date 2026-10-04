@@ -227,3 +227,27 @@ func TestChannelLimitsAndDisabled(t *testing.T) {
 	u := off.mustUser("user1")
 	u.call("POST", "/v1/channels", map[string]any{"title_enc": b64.EncodeToString([]byte("t")), "policy": map[string]any{"join_mode": "open"}}, 404, nil)
 }
+
+func TestChannelAuthorCanDeleteOwnPost(t *testing.T) {
+	n := newNode(t, nil)
+	owner, alice, bob := n.mustUser("owner"), n.mustUser("alice"), n.mustUser("bob")
+	ch := newChannel(owner, map[string]any{"join_mode": "open", "members_can_write": true})
+	for _, u := range []*user{alice, bob} {
+		u.chanCall("POST", "/v1/channels/"+ch+"/join", map[string]any{"address": u.addr()}, 200, nil)
+	}
+	alice.post(ch, "a1", 201)
+	owner.post(ch, "o1", 201)
+	del := func(u *user, id string, code int) {
+		u.chanCall("POST", "/v1/channels/"+ch+"/mod", map[string]any{"action": "delete", "post_id": id}, code, nil)
+	}
+	del(bob, "pa1-000000", 403)   // fremder Beitrag, kein Moderator
+	del(alice, "po1-000000", 403) // Beitrag des Besitzers
+	if got := countPosts(bob.entries(ch)); got != 2 {
+		t.Fatalf("Beiträge nach abgelehnten Löschungen = %d", got)
+	}
+	del(alice, "pa1-000000", 200) // eigener Beitrag
+	if got := countPosts(bob.entries(ch)); got != 1 {
+		t.Fatalf("Beiträge nach eigener Löschung = %d", got)
+	}
+	del(alice, "pa1-000000", 404) // schon gelöscht
+}

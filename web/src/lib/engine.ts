@@ -264,6 +264,10 @@ export class Engine {
    * (deshalb kann ein Backup keinen Zustandsfork erzeugen); Verlauf und Gruppen kommen auf neuen Geräten per Aufnahme durch ein aktives Gerät.
    */
   exportBackup(passphrase: string): Uint8Array {
+    return this.core.vaultSeal(passphrase, enc.encode(this.backupJson()));
+  }
+
+  private backupJson(): string {
     const s = this.state!;
     const sync: Partial<AppState> = {
       contacts: s.contacts, blockedUsers: s.blockedUsers, blockedServers: s.blockedServers, allowUsers: s.allowUsers,
@@ -271,8 +275,19 @@ export class Engine {
       sendDelivered: s.sendDelivered, sendRead: s.sendRead, onceDropOwnCopy: s.onceDropOwnCopy, intro: s.intro,
       channels: Object.fromEntries(Object.entries(s.channels ?? {}).map(([k, c]) => [k, { ...c, posts: [], events: [], cursor: 0, unread: 0 }])),
     };
-    const json = JSON.stringify({ v: 2, address: s.me.address, aik: b64(this.client!.exportIdentity()), sync });
-    return this.core.vaultSeal(passphrase, enc.encode(json));
+    return JSON.stringify({ v: 2, address: s.me.address, aik: b64(this.client!.exportIdentity()), sync });
+  }
+
+  /**
+   * „Gerät per QR-Code anmelden“: Der Backup-Inhalt wird mit einem Einmalschlüssel verschlüsselt beim Home-Server hinterlegt (5 min, einmal abrufbar).
+   * Der Schlüssel steht nur im QR-Code; wer ihn aufnimmt, kann das Konto auf einem Gerät hinzufügen. Der Link ist `chatlink1:<base64url(json)>`.
+   */
+  async createDeviceLink(): Promise<{ link: string; expiresIn: number }> {
+    const key = this.core.envelopeKey();
+    const blob = this.core.envelopeSeal(key, 4, enc.encode('transfer'), new Uint8Array(), enc.encode(this.backupJson()));
+    const r = await this.api!.call<{ id: string; expires_in: number }>('POST', '/v1/transfer', { data: b64(blob) });
+    const j = JSON.stringify({ s: this.state!.me.domain, i: r.id, k: b64(key) });
+    return { link: 'chatlink1:' + b64(enc.encode(j)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''), expiresIn: r.expires_in };
   }
 
   /** Nach dem Speichern der Backup-Datei aufrufen (hebt die Pflicht nach der Registrierung auf). */
@@ -868,9 +883,41 @@ export class Engine {
     return c ? `${location.origin}/#/add/${encodeCard(c)}` : '';
   }
 
+  // ---------- Chat-Code (frei wählbarer Kurzcode für die eigene Kontaktkarte) ----------
+
+  async myChatCode(): Promise<string> {
+    return (await this.api!.call<{ code: string }>('GET', '/v1/code')).code;
+  }
+
+  async setChatCode(code: string): Promise<string> {
+    const c = this.myCard();
+    if (!c) throw new Error('Kontaktaufnahme ist deaktiviert (Einstellungen → Kontaktlink).');
+    return (await this.api!.call<{ code: string }>('PUT', '/v1/code', { code: code.trim(), card: encodeCard(c) })).code;
+  }
+
+  async removeChatCode(): Promise<void> {
+    await this.api!.call('DELETE', '/v1/code');
+  }
+
+  /** Löst einen Chat-Code (`code` oder `code@server`) in eine Kontaktkarte auf. */
+  async resolveChatCode(input: string): Promise<ContactCard> {
+    const t = input.trim().toLowerCase();
+    const [code, dom] = t.includes('@') ? (t.split('@') as [string, string]) : [t, ''];
+    if (!/^[a-z0-9][a-z0-9_-]{2,39}$/.test(code)) throw new Error('Ungültiger Code.');
+    let r: { card: string };
+    try {
+      r = await this.api!.call<{ card: string }>('GET', `/v1/codes/${code}${dom ? `?domain=${encodeURIComponent(dom)}` : ''}`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) throw new Error('Diesen Code gibt es nicht.');
+      throw e;
+    }
+    return decodeCard(r.card);
+  }
+
   async setIntroEnabled(on: boolean): Promise<void> {
     const s = this.state!;
     if (!on && s.intro) {
+      await this.api!.call('DELETE', '/v1/code').catch(() => undefined); // ohne Intro-Postfach ist ein Code wirkungslos
       await this.api!.call('DELETE', `/v1/mailboxes/${s.intro.mailbox_id}`);
       delete s.mailboxes[s.intro.mailbox_id];
       s.intro = null;
@@ -1333,6 +1380,30 @@ export class Engine {
     m.deleted = true;
     m.parts = [];
     await this.broadcast(conv, this.newEnvelope({ kind: 'delete', reference: ref }));
+    this.dirty();
+  }
+
+  /**
+   * Eigene Datei löschen: entfernt die Nachricht bzw. den Kanal-Beitrag (für alle) und löscht die zugehörigen Dateien (alle der Nachricht)
+   * vom Heimserver; der verfügbare Speicher wird dadurch wieder frei.
+   */
+  async deleteOwnFiles(where: { convId?: string; chanId?: string; msgId: string }): Promise<void> {
+    const s = this.state!;
+    let parts: Part[] = [];
+    if (where.chanId) {
+      const p = s.channels?.[where.chanId]?.posts.find((x) => x.id === where.msgId);
+      if (!p || p.from !== s.me.address) return;
+      parts = p.parts;
+      await this.channels.mod(where.chanId, { action: 'delete', post_id: where.msgId });
+    } else if (where.convId) {
+      const m = s.conversations[where.convId]?.messages.find((x) => x.id === where.msgId);
+      if (!m || m.from !== s.me.address) return;
+      parts = m.parts;
+      await this.deleteMessage(where.convId, where.msgId);
+    }
+    for (const p of parts) {
+      if (p.type === 'file' && p.blob_server === s.me.domain) await this.api!.call('DELETE', `/v1/blobs/${encodeURIComponent(p.blob_id)}`).catch(() => undefined);
+    }
     this.dirty();
   }
 

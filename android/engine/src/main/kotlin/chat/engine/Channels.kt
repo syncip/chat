@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonArray
@@ -37,6 +38,8 @@ data class ChannelPolicy(
     val probation_seconds: Long = 0,
     val members_can_write: Boolean = false,
     val slow_mode_seconds: Long = 0,
+    /** Öffentlicher Kanal: unverschlüsselt, ohne Konto lesbar (nur bei Erstellung wählbar). */
+    @SerialName("public") val isPublic: Boolean = false,
 )
 
 @Serializable
@@ -59,6 +62,8 @@ data class ChPost(
     val ik: String,
     var parts: List<Part> = emptyList(),
     var deleted: Boolean = false,
+    /** Über einen Webhook eingegangen (vom Server verfasst, nicht von einem Mitglied signiert). */
+    val hook: String? = null,
     /** Signatur oder Entschlüsselung fehlgeschlagen. */
     val bad: Boolean = false,
 )
@@ -82,6 +87,9 @@ data class ChannelState(
     val createdAt: Long,
 )
 
+@Serializable
+data class ChHook(val id: String, val name: String, val created_at: Long = 0, val last_used: Long = 0)
+
 data class ChannelPreview(val id: String, val server: String, val title: String, val policy: ChannelPolicy, val members: Int)
 
 class NeedsCaptcha(val token: String, val imagePngBase64: String) : ChatException("Captcha erforderlich")
@@ -99,7 +107,7 @@ fun decodeChannelLink(text: String): ChannelLink {
         ?: throw ChatException("Ungültiger Kanal-Link")
     return try {
         val j = ChatJson.parseToJsonElement(String(Base64.getUrlDecoder().decode(m))).jsonObject
-        ChannelLink(j["s"]!!.jsonPrimitive.content, j["c"]!!.jsonPrimitive.content, j["k"]!!.jsonPrimitive.content)
+        ChannelLink(j["s"]!!.jsonPrimitive.content, j["c"]!!.jsonPrimitive.content, j["k"]!!.jsonPrimitive.content) // k leer = öffentlicher Kanal
     } catch (e: Exception) {
         throw ChatException("Ungültiger Kanal-Link")
     }
@@ -163,22 +171,26 @@ internal class ChannelManager(
         fun dirty()
         suspend fun home(method: String, uri: String, json: String?): String
         fun closed(): Boolean
+        /** Neuer Beitrag eines anderen (Benachrichtigung). */
+        fun incoming()
     }
 
     private val sockets = mutableMapOf<String, WebSocket>()
     private val retry = mutableMapOf<String, Job>()
     private val syncing = mutableSetOf<String>()
+    private val again = mutableSetOf<String>() // während eines laufenden Abgleichs eingetroffene Ereignisse
 
     private val channels get() = host.state().channels
     private fun api(c: ChannelState) = ChannelApi(http, c.server, c.id, host.client())
-    private fun seal(key: String, gid: ByteArray, payload: ByteArray) = uniffi.chat_core.envelopeSeal(key.unb64(), KIND_CHANNEL, gid, ByteArray(0), payload)
+    private fun seal(key: String, gid: ByteArray, payload: ByteArray): ByteArray =
+        if (key.isEmpty()) payload else uniffi.chat_core.envelopeSeal(key.unb64(), KIND_CHANNEL, gid, ByteArray(0), payload) // leerer Schlüssel = öffentlich (Klartext)
 
-    private fun open(key: String, gid: ByteArray, blob: ByteArray): ByteArray? = try {
+    private fun open(key: String, gid: ByteArray, blob: ByteArray): ByteArray? = if (key.isEmpty()) blob else try {
         val o = uniffi.chat_core.envelopeOpen(key.unb64(), blob)
         if (o.kind == KIND_CHANNEL && o.groupId.contentEquals(gid)) o.payload else null
     } catch (e: Exception) { null }
 
-    private fun title(key: String, enc64: String): String = open(key, TITLE_GID, enc64.unb64())?.let { String(it) } ?: "(unbekannt)"
+    private fun title(key: String, enc64: String): String = if (key.isEmpty()) String(enc64.unb64()) else open(key, TITLE_GID, enc64.unb64())?.let { String(it) } ?: "(unbekannt)"
 
     private fun policyOf(o: JsonObject) = ChatJson.decodeFromJsonElement(ChannelPolicy.serializer(), o)
 
@@ -188,8 +200,9 @@ internal class ChannelManager(
 
     // ---------- Verwaltung ----------
 
-    suspend fun create(title: String, policy: ChannelPolicy): String {
-        val key = uniffi.chat_core.envelopeKey().b64()
+    suspend fun create(title: String, policy0: ChannelPolicy, isPublic: Boolean = false): String {
+        val policy = policy0.copy(isPublic = isPublic)
+        val key = if (isPublic) "" else uniffi.chat_core.envelopeKey().b64()
         val name = title.trim().ifEmpty { "Kanal" }
         val body = buildJsonObject { put("title_enc", seal(key, TITLE_GID, name.toByteArray()).b64()); put("policy", policyJson(policy)) }.toString()
         val id = ChatJson.parseToJsonElement(host.home("POST", "/v1/channels", body)).jsonObject["id"]!!.jsonPrimitive.content
@@ -241,6 +254,50 @@ internal class ChannelManager(
         sync(l.c)
         watch(l.c)
         return l.c
+    }
+
+    /** Kanal aus dem Konto-Sync übernehmen (dasselbe Konto ist serverseitig bereits Mitglied/Besitzer). */
+    fun adopt(id: String, server: String, key: String, title: String, createdAt: Long) {
+        if (channels.containsKey(id)) return
+        val c = ChannelState(id, server, key, title, ChannelPolicy(join_mode = "open", pow_bits = 0, isPublic = key.isEmpty()), ChannelMember(address = host.state().me.address), createdAt = createdAt)
+        channels[id] = c
+        host.dirty()
+        scope.launch(dispatcher) { runCatching { sync(id) } }
+        watch(id)
+    }
+
+    /** Kanal lokal entfernen (Löschung auf einem anderen Gerät). */
+    fun drop(id: String) {
+        if (!channels.containsKey(id)) return
+        unwatch(id)
+        channels.remove(id)
+        host.dirty()
+    }
+
+    /** Öffentlicher Lese-Link (ohne Konto) – nur für öffentliche Kanäle. */
+    fun publicLink(id: String): String = channels[id]!!.let {
+        val j = buildJsonObject { put("s", it.server); put("c", it.id) }
+        "#/c/" + Base64.getUrlEncoder().withoutPadding().encodeToString(j.toString().toByteArray())
+    }
+
+    // ---------- Webhooks (ntfy-kompatibel, siehe docs/NTFY.md) ----------
+
+    suspend fun hooks(id: String): List<ChHook> {
+        val r = api(channels[id]!!).call("GET", "/hooks")
+        return ChatJson.decodeFromJsonElement(ListSerializer(ChHook.serializer()), ChatJson.parseToJsonElement(r).jsonObject["hooks"]!!)
+    }
+
+    /** Legt einen Webhook an und liefert seine Adresse (nur jetzt sichtbar). Bei nicht öffentlichen Kanälen erhält der Server den Kanalschlüssel. */
+    suspend fun createHook(id: String, name: String): String {
+        val c = channels[id]!!
+        val body = buildJsonObject { put("name", name); if (c.key.isNotEmpty()) put("key", c.key) }.toString()
+        val r = ChatJson.parseToJsonElement(api(c).call("POST", "/hooks", body)).jsonObject
+        return "${baseUrl(c.server)}/h/${r["token"]!!.jsonPrimitive.content}"
+    }
+
+    suspend fun deleteHook(id: String, hookId: String) {
+        api(channels[id]!!).call("DELETE", "/hooks/$hookId")
+        sync(id)
     }
 
     suspend fun leave(id: String) {
@@ -315,18 +372,22 @@ internal class ChannelManager(
             val deleted = e["deleted"]?.jsonPrimitive?.content == "true"
             var parts: List<Part> = emptyList()
             var bad = false
-            if (!deleted && e["data"] != null && e["sig"] != null) {
+            val hook = e["hook"]?.jsonPrimitive?.content
+            if (!deleted && e["data"] != null && (e["sig"] != null || hook != null)) {
                 val data = e["data"]!!.jsonPrimitive.content.unb64()
                 val epoch = e["epoch"]?.jsonPrimitive?.content ?: "0"
                 val msg = "CHAT-POST-V1\n${c.id}\n$pid\n$ts\n$epoch\n${sha256Bytes(data).hex()}"
-                val okSig = uniffi.chat_core.ed25519Verify(ik.unb64(), msg.toByteArray(), e["sig"]!!.jsonPrimitive.content.unb64())
+                val okSig = hook != null || uniffi.chat_core.ed25519Verify(ik.unb64(), msg.toByteArray(), e["sig"]!!.jsonPrimitive.content.unb64())
                 val pt = open(c.key, c.id.toByteArray(), data)
                 if (!okSig || pt == null) bad = true else {
                     try { parts = ChatJson.decodeFromString(PostPayload.serializer(), String(pt)).parts } catch (x: Exception) { bad = true }
                 }
             }
-            c.posts.add(ChPost(pid, seq, ts, address, ik, parts, deleted, bad))
-            if (address != host.state().me.address) c.unread++
+            c.posts.add(ChPost(pid, seq, ts, address, ik, parts, deleted, hook, bad))
+            if (address != host.state().me.address) {
+                c.unread++
+                if (c.cursor > 0 || c.posts.size > 1) host.incoming()
+            }
         } else {
             val kind = e["kind"]?.jsonPrimitive?.content ?: ""
             val meta = e["meta"]?.jsonPrimitive?.content ?: ""
@@ -339,7 +400,7 @@ internal class ChannelManager(
 
     suspend fun sync(id: String) {
         val c = channels[id] ?: return
-        if (!syncing.add(id)) return
+        if (!syncing.add(id)) { again.add(id); return }
         try {
             for (i in 0 until 50) {
                 val r = try {
@@ -358,6 +419,7 @@ internal class ChannelManager(
                 if (entries.size < 100) break
             }
         } finally { syncing.remove(id) }
+        if (again.remove(id)) sync(id)
     }
 
     fun markRead(id: String) {

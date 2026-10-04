@@ -179,6 +179,7 @@ export class ChannelManager {
   private sockets = new Map<string, WebSocket>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private syncing = new Set<string>();
+  private again = new Set<string>(); // während eines laufenden Abgleichs eingetroffene Ereignisse
   private closed = true;
 
   constructor(private h: Host) {}
@@ -419,7 +420,11 @@ export class ChannelManager {
 
   async sync(id: string): Promise<void> {
     const c = this.channels[id];
-    if (!c || this.syncing.has(id)) return;
+    if (!c) return;
+    if (this.syncing.has(id)) {
+      this.again.add(id);
+      return;
+    }
     this.syncing.add(id);
     try {
       for (let i = 0; i < 50; i++) {
@@ -448,6 +453,7 @@ export class ChannelManager {
     } finally {
       this.syncing.delete(id);
     }
+    if (this.again.delete(id)) await this.sync(id);
   }
 
   markRead(id: string): void {

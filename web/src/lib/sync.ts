@@ -99,20 +99,24 @@ export class AccountSync {
       const merged: Record<string, Item> = { ...doc.items };
       let push = false;
       const keys = new Set([...Object.keys(doc.items), ...Object.keys(base)]);
+      const applied: string[] = [];
       for (const k of keys) {
         const rem = doc.items[k];
         const loc = base[k];
-        const localWins = !rem || (loc && (loc.ts > rem.ts || (loc.ts === rem.ts && loc.h >= stable(rem.val ?? ''))));
-        if (localWins && loc) {
-          const same = rem && rem.del === loc.del && (loc.del || stable(rem.val) === loc.h);
-          if (!same) {
-            merged[k] = loc.del ? { ts: loc.ts, del: true } : { ts: loc.ts, del: false, val: cur[k] };
-            push = true;
-          }
-        } else if (rem) {
+        if (loc && (!rem || loc.ts > rem.ts)) {
+          // lokale Änderung ist neuer: weitergeben
+          merged[k] = loc.del ? { ts: loc.ts, del: true } : { ts: loc.ts, del: false, val: cur[k] };
+          push = true;
+        } else if (rem && (!loc || loc.ts !== rem.ts || loc.del !== rem.del)) {
+          // Eintrag eines anderen Geräts ist neuer (oder neu): übernehmen
           this.apply(k, rem);
-          base[k] = { h: rem.del ? '' : stable(rem.val), ts: rem.ts, del: rem.del };
+          base[k] = { h: '', ts: rem.ts, del: rem.del };
+          applied.push(k);
         }
+      }
+      if (applied.length) {
+        const after = collect(this.h.state()); // Darstellung kann je Client leicht abweichen: lokalen Stand als Referenz nehmen
+        for (const k of applied) if (!base[k].del && k in after) base[k].h = stable(after[k]);
       }
       for (const [k, it] of Object.entries(merged)) if (it.del && Date.now() - it.ts > TOMBSTONE_MS) delete merged[k];
       if (!push) {

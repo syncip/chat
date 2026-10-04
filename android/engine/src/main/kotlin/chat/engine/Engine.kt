@@ -92,7 +92,36 @@ class Engine(
         override fun dirty() = this@Engine.dirty()
         override suspend fun home(method: String, uri: String, json: String?) = api!!.call(method, uri, json)
         override fun closed() = closed
+        override fun incoming() { _newMessages.tryEmit("channel") }
     })
+
+    private val accountSync = AccountSync(object : AccountSync.Host {
+        override fun state() = state!!
+        override fun client() = client!!
+        override suspend fun call(method: String, uri: String, json: String?, ok: List<Int>) = api!!.call(method, uri, json, ok)
+        override fun applyChannel(id: String, server: String?, key: String, title: String, createdAt: Long) {
+            if (server != null) channels.adopt(id, server, key, title, createdAt) else channels.drop(id)
+        }
+        override fun dirty() = this@Engine.dirty()
+        override fun now() = clock()
+    })
+    private var lastSyncSig = ""
+    private var syncTimer: Job? = null
+
+    /** Änderungen an synchronisierten Daten entprellt an die anderen Geräte weitergeben. */
+    private fun scheduleSync() {
+        if (syncTimer?.isActive == true || state == null || api == null || closed) return
+        syncTimer = scope.launch(dispatcher) {
+            delay(1500)
+            if (state != null && accountSync.signature() != lastSyncSig) incoming.trySend { syncNow() }
+        }
+    }
+
+    private suspend fun syncNow() {
+        if (state == null || api == null) return
+        try { accountSync.run() } catch (e: Exception) { System.err.println("sync: $e") }
+        if (state != null) lastSyncSig = accountSync.signature()
+    }
 
     private fun emit() { _version.value = _version.value + 1 }
 
@@ -280,7 +309,23 @@ class Engine(
     /** Nach dem Speichern der Backup-Datei aufrufen (hebt die Pflicht nach der Registrierung auf). */
     // ---------- Öffentliche Kanäle ----------
 
-    suspend fun createChannel(title: String, policy: ChannelPolicy): String = op { channels.create(title, policy) }
+    suspend fun createChannel(title: String, policy: ChannelPolicy, isPublic: Boolean = false): String = op { channels.create(title, policy, isPublic) }
+    suspend fun channelPublicLink(id: String, host: String): String = op { "$host/${channels.publicLink(id)}" }
+    suspend fun channelHooks(id: String): List<ChHook> = op { channels.hooks(id) }
+    suspend fun createChannelHook(id: String, name: String): String = op { channels.createHook(id, name) }
+    suspend fun deleteChannelHook(id: String, hookId: String) = op { channels.deleteHook(id, hookId) }
+
+    // ---------- Administration (nur für Administratoren) ----------
+
+    /** true, wenn dieses Konto Administrator des Servers ist (der erste registrierte Nutzer). */
+    suspend fun isAdmin(): Boolean = op {
+        runCatching { ChatJson.parseToJsonElement(api!!.call("GET", "/v1/me")).jsonObject["admin"]!!.jsonPrimitive.boolean }.getOrDefault(false)
+    }
+    suspend fun adminStats(): JsonObject = op { ChatJson.parseToJsonElement(api!!.call("GET", "/v1/admin/stats")).jsonObject }
+    suspend fun adminSettings(): JsonObject = op { ChatJson.parseToJsonElement(api!!.call("GET", "/v1/admin/settings")).jsonObject }
+    suspend fun saveAdminSettings(s: JsonObject): JsonObject = op { ChatJson.parseToJsonElement(api!!.call("PUT", "/v1/admin/settings", s.toString())).jsonObject }
+    suspend fun adminUsers(): JsonArray = op { ChatJson.parseToJsonElement(api!!.call("GET", "/v1/admin/users")).jsonObject["users"]!!.jsonArray }
+    suspend fun setAdmin(name: String, admin: Boolean) = op { api!!.call("PUT", "/v1/admin/users/$name/admin", buildJsonObject { put("admin", admin) }.toString()); Unit }
     suspend fun previewChannel(link: String): ChannelPreview = op { channels.preview(link) }
     suspend fun joinChannel(link: String, captchaToken: String? = null, captchaAnswer: String? = null): String = op { channels.join(link, captchaToken, captchaAnswer) }
     suspend fun leaveChannel(id: String) = op { channels.leave(id) }
@@ -309,6 +354,7 @@ class Engine(
 
     private fun dirty() {
         emit()
+        scheduleSync()
         if (saveJob?.isActive == true) return
         saveJob = scope.launch(dispatcher) { delay(250); persist() }
     }
@@ -361,7 +407,8 @@ class Engine(
         connect()
         channels.start()
         tick = scope.launch(dispatcher) {
-            while (true) { delay(30_000); purgeExpired(); retryOutbox() }
+            var n = 0
+            while (true) { delay(30_000); purgeExpired(); retryOutbox(); if (++n % 2 == 0) incoming.trySend { syncNow() } } // Sicherheitsnetz für verpasste Sync-Ereignisse
         }
     }
 
@@ -381,10 +428,12 @@ class Engine(
                             _online.value = true
                             incoming.trySend { catchUp() }
                             incoming.trySend { reconcileDevices() }
+                            incoming.trySend { syncNow() }
                             incoming.trySend { retryOutbox() }
                             incoming.trySend { replenishKeyPackages() }
                         }
                         "devices" -> incoming.trySend { reconcileDevices() }
+                        "sync" -> incoming.trySend { syncNow() }
                         "message" -> {
                             val seq = m["seq"]!!.jsonPrimitive.content.toLong()
                             val mb = m["mailbox_id"]!!.jsonPrimitive.content

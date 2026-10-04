@@ -363,6 +363,7 @@ export class Engine {
     this.channels.start();
     this.timers.push(setInterval(() => this.purgeExpired(), 30_000));
     this.timers.push(setInterval(() => void this.retryOutbox(), 30_000));
+    this.timers.push(setInterval(() => this.enqueue(() => this.syncNow()), 60_000)); // Sicherheitsnetz, falls ein Sync-Ereignis verpasst wurde
   }
 
   private connect() {

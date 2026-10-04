@@ -100,6 +100,7 @@ try {
   console.log('✔ Webhook an verschlüsseltem Kanal (Server verschlüsselt, Client entschlüsselt)');
 
   // --- Konto-Sync: zweites Gerät übernimmt Kanäle ---
+  await sleep(3000); // Gerät 1 gibt Änderungen entprellt weiter
   await alice2.goto(`${base}/`);
   await alice2.evaluate(() => localStorage.setItem('chat.minPass', '4'));
   await linkDevice(alice2, P, aliceBackup, 'abcd');

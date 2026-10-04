@@ -191,6 +191,8 @@ data class AppState(
     /** Bekannte Geräte des Kontos (zur Erkennung neu hinzugefügter Geräte) und offene Sicherheitshinweise. */
     var knownDevices: MutableList<String>? = null,
     val alerts: MutableList<SecurityAlert> = mutableListOf(),
+    /** Konto-Sync: zuletzt abgeglichene Version und lokale Änderungsstände je Eintrag. */
+    var sync: SyncState? = null,
 )
 
 @Serializable

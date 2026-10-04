@@ -27,6 +27,7 @@ jobs:
   apk:
     name: APK bauen (Debug) + Lint
     runs-on: ubuntu-latest
+    permissions: { contents: write }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -71,6 +72,18 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with: { name: chat-release-apk, path: android/app/build/outputs/apk/release/*.apk }
+      # Direkt herunterladbare APK (auch am Handy, ohne ZIP und ohne Anmeldung): fortlaufend aktualisierte Vorab-Version „android-latest“.
+      - name: APK als Vorab-Release „android-latest“ veröffentlichen
+        if: github.event_name == 'push'
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/*.apk "dist/chat-0.3.0-build-${GITHUB_RUN_NUMBER}.apk"
+          cp android/app/build/outputs/apk/debug/*.apk "dist/chat-test-0.3.0-build-${GITHUB_RUN_NUMBER}.apk"
+          gh release delete android-latest --cleanup-tag --yes || true
+          gh release create android-latest dist/*.apk --prerelease --target "$GITHUB_SHA" \
+            --title "Android – neueste Version (Build ${GITHUB_RUN_NUMBER})" \
+            --notes "Automatisch gebaut aus ${GITHUB_REF_NAME} (${GITHUB_SHA::7}). chat-…apk ist die normale App; chat-test-…apk installiert sich zusätzlich als „Chat (Test)“. Signiert mit dem öffentlichen Test-Schlüssel, solange kein eigener hinterlegt ist."
 
   emulator:
     name: Emulator-Tests (echte App gegen echten Server)

@@ -6,6 +6,10 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.onAllNodes
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -61,8 +65,9 @@ class AppFlowTest {
 
     private fun waitTag(tag: String, ms: Long = 30_000) = compose.waitUntilAtLeastOneExists(hasTestTag(tag), ms)
     private fun waitText(text: String, ms: Long = 30_000) = compose.waitUntilAtLeastOneExists(hasText(text, substring = true), ms)
-    private fun type(tag: String, text: String) { waitTag(tag); compose.onNodeWithTag(tag).performTextInput(text) }
-    private fun click(tag: String) { waitTag(tag); compose.onNodeWithTag(tag).performClick() }
+    private fun scrollTo(tag: String) { runCatching { compose.onNodeWithTag(tag).performScrollTo() } }
+    private fun type(tag: String, text: String) { waitTag(tag); scrollTo(tag); compose.onNodeWithTag(tag).performTextInput(text) }
+    private fun click(tag: String) { waitTag(tag); scrollTo(tag); compose.onNodeWithTag(tag).performClick() }
 
     private fun until(what: String, ms: Long = 60_000, cond: () -> Boolean) {
         val end = System.currentTimeMillis() + ms
@@ -72,6 +77,14 @@ class AppFlowTest {
 
     @Test
     fun fullFlow() {
+        try { flow() } catch (e: Throwable) {
+            // Bei Fehlern den sichtbaren UI-Baum mitliefern, damit man im CI-Log sieht, wo die App steht.
+            val tree = runCatching { compose.onAllNodes(isRoot()).printToString(maxDepth = 30) }.getOrElse { "(kein UI-Baum: ${it.message})" }
+            throw AssertionError("${e.message}\n--- UI ---\n$tree", e)
+        }
+    }
+
+    private fun flow() {
         val pass = "emulator-pass-1"
         // 1. Registrierung über die Oberfläche
         click("onb_register")

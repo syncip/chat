@@ -200,7 +200,7 @@ fun HomeScreen(vm: AppViewModel, s: AppState, online: Boolean, isAdmin: Boolean)
                         if (convs.isEmpty()) item { EmptyHint("Noch keine Chats", "Tippe auf ＋ und füge den Link oder Chat-Code eines Kontakts ein – oder starte „Notizen an mich“.") }
                         items(convs, key = { "c-" + it.id }) { c ->
                             ChatListRow(
-                                title = (if (c.kind == "group" && !vm.engine.isSelfChat(s, c)) "" else "") + c.title,
+                                title = c.title,
                                 avatar = vm.engine.avatarOfConv(s, c), square = false,
                                 preview = convPreview(s, c), time = c.messages.lastOrNull()?.ts ?: c.createdAt, unread = c.unread,
                                 request = c.status == "request",

@@ -7,7 +7,7 @@ import { ChannelManager } from './channels';
 import { loadCore, type Client, type Core, type Vault } from './core';
 import { kv } from './db';
 import type {
-  AppState, Cap, CapEntry, Conversation, Content, Contact, DeviceInfo, Envelope, FilterMode, Msg, Part, ServerInfo,
+  AppState, Cap, CapEntry, SecurityAlert, Conversation, Content, Contact, DeviceInfo, Envelope, FilterMode, Msg, Part, ServerInfo,
 } from './types';
 import {
   b64, dec, enc, hex, randomId, sha256, solvePow, splitAddress, unb64, unhex,
@@ -277,6 +277,8 @@ export class Engine {
     await this.flush();
     this.closed = true;
     this.channels.stop();
+    this.mediaCache.forEach((u) => void u.then((x) => URL.revokeObjectURL(x), () => undefined));
+    this.mediaCache.clear();
     this.timers.forEach(clearInterval);
     this.timers = [];
     this.ws?.close();
@@ -438,6 +440,7 @@ export class Engine {
         s.contacts[m.address] = { address: m.address, ik: m.ik, verified: false };
       } else if (c.ik !== m.ik) {
         conv.warning = `Der Schlüssel von ${m.address} hat sich geändert. Bitte neu verifizieren.`;
+        this.addAlert({ id: `key-${m.address}-${m.ik.slice(0, 8)}`, kind: 'key', text: conv.warning });
         c.verified = false;
       }
     }
@@ -1006,6 +1009,7 @@ export class Engine {
     this.reconciling = true;
     try {
       const devs = await this.listDevices();
+      this.trackDevices(devs);
       const active = new Set(devs.map((d) => d.id));
       for (const conv of Object.values(s.conversations)) {
         if (conv.status !== 'active') continue;
@@ -1165,8 +1169,50 @@ export class Engine {
     const ct = await Api.downloadBlob(p.blob_server, p.blob_id);
     const data = this.core.fileDecrypt(unb64(p.key), unb64(p.nonce), ct);
     if (data.length !== p.size || hex(await sha256(data)) !== p.sha256) throw new Error('Datei beschädigt oder manipuliert.');
-    const safeImage = /^image\/(png|jpeg|gif|webp)$/.test(p.mime);
-    return new Blob([data as BlobPart], { type: safeImage ? p.mime : 'application/octet-stream' });
+    return new Blob([data as BlobPart], { type: isSafeMedia(p.mime) ? p.mime : 'application/octet-stream' });
+  }
+
+  private mediaCache = new Map<string, Promise<string>>();
+
+  /** Entschlüsselte Datei als Blob-URL (für Bilder/Audio/Video); je Datei nur einmal geladen. */
+  mediaUrl(p: Extract<Part, { type: 'file' }>): Promise<string> {
+    let r = this.mediaCache.get(p.blob_id);
+    if (!r) {
+      r = this.downloadFile(p).then((b) => URL.createObjectURL(b));
+      r.catch(() => this.mediaCache.delete(p.blob_id));
+      this.mediaCache.set(p.blob_id, r);
+    }
+    return r;
+  }
+
+  dismissAlert(id: string): void {
+    const s = this.state!;
+    s.alerts = (s.alerts ?? []).filter((a) => a.id !== id);
+    this.dirty();
+  }
+
+  private addAlert(a: Omit<SecurityAlert, 'ts'>): void {
+    const s = this.state!;
+    s.alerts ??= [];
+    if (s.alerts.some((x) => x.id === a.id)) return;
+    s.alerts.push({ ...a, ts: Date.now() });
+    this.notice = a.text;
+  }
+
+  /** Erkennt Geräte, die seit dem letzten Abgleich neu zum Konto hinzugekommen sind. */
+  private trackDevices(devs: DeviceInfo[]): void {
+    const s = this.state!;
+    const ids = devs.map((d) => d.id);
+    if (!s.knownDevices) {
+      s.knownDevices = ids;
+      return;
+    }
+    for (const id of ids) {
+      if (s.knownDevices.includes(id)) continue;
+      s.knownDevices.push(id);
+      this.addAlert({ id: `dev-${id}`, kind: 'device', text: `Neues Gerät ${id} wurde deinem Konto hinzugefügt. Warst du das nicht, widerrufe es sofort (Einstellungen → Geräte).` });
+    }
+    s.knownDevices = s.knownDevices.filter((id) => ids.includes(id));
   }
 
   async react(id: string, ref: string, emoji: string): Promise<void> {
@@ -1377,6 +1423,12 @@ export class Engine {
     return this.lastSeq;
   }
 }
+
+/** Dateitypen, die der Browser direkt anzeigen/abspielen darf (alles andere wird nur als Download angeboten). */
+export const IMAGE_RE = /^image\/(png|jpeg|gif|webp)$/;
+export const AUDIO_RE = /^audio\/(mpeg|mp3|ogg|wav|x-wav|webm|aac|flac|mp4|x-m4a)$/;
+export const VIDEO_RE = /^video\/(mp4|webm|ogg|quicktime)$/;
+export const isSafeMedia = (mime: string) => IMAGE_RE.test(mime) || AUDIO_RE.test(mime) || VIDEO_RE.test(mime);
 
 export function snippetOf(m: Msg): string {
   if (m.once) return '🔒 Einmal-Nachricht'; // nie Inhalt einer Einmal-Nachricht in Vorschau/Zitat

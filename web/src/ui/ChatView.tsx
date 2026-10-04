@@ -5,6 +5,9 @@ import { formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
 import { MessageView } from './Message';
 import { Dialog } from './Dialog';
+import { Avatar } from './Avatar';
+import { FilesDialog } from './Files';
+import { convSecurity } from '../lib/security';
 
 export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBack: () => void; onClosed: () => void }) {
   const e = useEngine();
@@ -19,6 +22,7 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -56,7 +60,7 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
   if (conv.status === 'request') {
     return (
       <div className="chat">
-        <ChatHeader conv={conv} onBack={onBack} onInfo={() => setInfo(true)} />
+        <ChatHeader conv={conv} onBack={onBack} onInfo={() => setInfo(true)} onFiles={() => setFilesOpen(true)} />
         <div className="messages">
           <div className="card pad">
             <p><strong>{conv.title}</strong> möchte mit dir chatten.</p>
@@ -76,7 +80,7 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
   const active = conv.status === 'active';
   return (
     <div className="chat">
-      <ChatHeader conv={conv} onBack={onBack} onInfo={() => setInfo(true)} />
+      <ChatHeader conv={conv} onBack={onBack} onInfo={() => setInfo(true)} onFiles={() => setFilesOpen(true)} />
       {conv.warning && <div className="banner warn">⚠ {conv.warning}</div>}
       <div className="messages">
         {conv.messages.map((m) => (
@@ -119,18 +123,24 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
       ) : (
         <div className="banner">Du bist in dieser Unterhaltung nicht mehr Mitglied.</div>
       )}
+      {filesOpen && <FilesDialog convId={conv.id} onClose={() => setFilesOpen(false)} />}
       {info && <ConvInfo conv={conv} onClose={() => setInfo(false)} onGone={onClosed} />}
     </div>
   );
 }
 
-function ChatHeader({ conv, onBack, onInfo }: { conv: Conversation; onBack: () => void; onInfo: () => void }) {
+function ChatHeader({ conv, onBack, onInfo, onFiles }: { conv: Conversation; onBack: () => void; onInfo: () => void; onFiles: () => void }) {
+  const e = useEngine();
+  const sec = convSecurity(e, conv);
   return (
     <header className="chat-header">
       <button className="back" onClick={onBack} aria-label="Zurück">←</button>
+      <Avatar name={conv.title} size={40} />
       <div className="grow"><strong>{conv.title}</strong>
         <div className="muted small">{conv.kind === 'group' ? `${memberAddresses(conv).length} Mitglieder` : 'Ende-zu-Ende-verschlüsselt'}{conv.disappearSeconds ? ` · ⏱ ${fmtDur(conv.disappearSeconds)}` : ''}</div>
       </div>
+      <button className={`sec-chip ${sec.level}`} onClick={onInfo} title="Sicherheitsnummer vergleichen">🔒 {sec.label}</button>
+      <button onClick={onFiles} title="Dateien in diesem Chat" aria-label="Dateien">📁</button>
       <button onClick={onInfo} aria-label="Details">ⓘ</button>
     </header>
   );

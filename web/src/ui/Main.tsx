@@ -7,9 +7,13 @@ import { Settings } from './Settings';
 import { BackupGate } from './BackupGate';
 import { Dialog } from './Dialog';
 import { StartChat, NewGroup } from './Dialogs';
+import { Avatar } from './Avatar';
+import { FilesDialog } from './Files';
+import { SecurityDialog } from './Security';
+import { securityReport } from '../lib/security';
 import { ChannelView, CreateChannel, JoinChannel } from './Channels';
 
-type Panel = null | 'settings' | 'new' | 'group' | 'channel' | 'join';
+type Panel = null | 'settings' | 'new' | 'group' | 'channel' | 'join' | 'files' | 'security';
 
 export function Main() {
   const e = useEngine();
@@ -44,14 +48,22 @@ export function Main() {
   const list = convs.filter((c) => c.status !== 'request');
   const current = active ? s.conversations[active] : undefined;
   const chans = Object.values(s.channels ?? {}).sort((a, b) => (b.posts.at(-1)?.ts ?? b.createdAt) - (a.posts.at(-1)?.ts ?? a.createdAt));
+  const sec = securityReport(e);
+  const alerts = s.alerts ?? [];
   const currentChan = activeChan ? s.channels?.[activeChan] : undefined;
 
   return (
-    <div className={`layout ${current || currentChan ? 'chat-open' : ''} ${isInsecureTransport() ? 'with-warning' : ''}`}>
+    <div className={`layout ${current || currentChan ? 'chat-open' : ''} ${isInsecureTransport() || alerts.length ? 'with-warning' : ''}`}>
       {isInsecureTransport() && (
         <div className="transport-warning" role="alert">
           ⚠ Unverschlüsselte Verbindung (http, kein TLS): Nachrichten bleiben Ende-zu-Ende verschlüsselt, aber ein Angreifer im Netzwerk
           kann die App selbst manipulieren und Schlüssel abgreifen. Nur in vertrauenswürdigen Netzen (LAN/VPN) nutzen.
+        </div>
+      )}
+      {alerts.length > 0 && (
+        <div className="alert-bar" role="alert">
+          <span className="grow">⚠ Sicherheitshinweis: {alerts[0].text}{alerts.length > 1 ? ` (+${alerts.length - 1} weitere)` : ''}</span>
+          <button onClick={() => setPanel('security')}>Ansehen</button>
         </div>
       )}
       <aside className="sidebar">
@@ -65,6 +77,8 @@ export function Main() {
             <button title="Neue Gruppe" onClick={() => setPanel('group')}>👥</button>
             <button title="Kanal erstellen" onClick={() => setPanel('channel')}>📢</button>
             <button title="Kanal beitreten" onClick={() => setPanel('join')}>🔗</button>
+            <button title="Alle Dateien" aria-label="Alle Dateien" onClick={() => setPanel('files')}>📁</button>
+            <button title="Sicherheit" aria-label="Sicherheit" className={`sec-chip ${sec.level}`} onClick={() => setPanel('security')}>🛡</button>
             <button title="Einstellungen" onClick={() => setPanel('settings')}>⚙</button>
           </div>
         </header>
@@ -81,17 +95,26 @@ export function Main() {
         <div className="convs">
           {chans.map((c) => (
             <button key={c.id} className={`conv ${c.id === activeChan ? 'active' : ''}`} onClick={() => { setActive(null); setActiveChan(c.id); e.channels.markRead(c.id); }}>
-              <span className="title">📢 {c.title}</span>
-              {c.unread > 0 && <span className="badge">{c.unread}</span>}
-              <span className="preview muted small">{c.me.status === 'pending' ? 'Wartet auf Freigabe' : c.me.status === 'banned' ? 'Gesperrt' : 'Öffentlicher Kanal'}</span>
+              <Avatar name={c.title} channel />
+              <span className="conv-main">
+                <span className="title">📢 {c.title}</span>
+                <span className="preview muted small">{c.me.status === 'pending' ? 'Wartet auf Freigabe' : c.me.status === 'banned' ? 'Gesperrt' : 'Öffentlicher Kanal'}</span>
+              </span>
+              <span className="conv-side">{c.unread > 0 && <span className="badge">{c.unread}</span>}</span>
             </button>
           ))}
           {list.length === 0 && chans.length === 0 && <p className="muted pad">Noch keine Chats. Teile deinen Kontaktlink (⚙) oder öffne den Link eines Kontakts (＋).</p>}
           {list.map((c) => (
             <button key={c.id} className={`conv ${c.id === active ? 'active' : ''}`} onClick={() => { setActiveChan(null); setActive(c.id); e.markRead(c.id); }}>
-              <span className="title">{c.kind === 'group' ? '👥 ' : ''}{c.title}</span>
-              {c.unread > 0 && <span className="badge">{c.unread}</span>}
-              <span className="preview muted small">{preview(c)}</span>
+              <Avatar name={c.title} />
+              <span className="conv-main">
+                <span className="title">{c.kind === 'group' ? '👥 ' : ''}{c.title}</span>
+                <span className="preview muted small">{preview(c)}</span>
+              </span>
+              <span className="conv-side">
+                <span className="time muted small">{c.messages.at(-1) ? timeShort(c.messages.at(-1)!.ts) : ''}</span>
+                {c.unread > 0 && <span className="badge">{c.unread}</span>}
+              </span>
             </button>
           ))}
         </div>
@@ -106,6 +129,8 @@ export function Main() {
         )}
       </main>
       {!s.backupDone && <BackupGate />}
+      {panel === 'files' && <FilesDialog onClose={() => setPanel(null)} />}
+      {panel === 'security' && <SecurityDialog onClose={() => setPanel(null)} />}
       {panel === 'settings' && <Settings onClose={() => setPanel(null)} />}
       {panel === 'new' && <StartChat onClose={() => setPanel(null)} onStarted={(id) => { setPanel(null); setActive(id); }} />}
       {panel === 'group' && <NewGroup onClose={() => setPanel(null)} onCreated={(id) => { setPanel(null); setActive(id); }} />}
@@ -123,6 +148,12 @@ export function Main() {
       {e.notice && <div className="toast" role="status" onClick={() => { e.notice = ''; }}>{e.notice}</div>}
     </div>
   );
+}
+
+function timeShort(ts: number): string {
+  const d = new Date(ts);
+  const today = new Date();
+  return d.toDateString() === today.toDateString() ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
 }
 
 function preview(c: { messages: { parts: { type: string; body?: string; name?: string }[]; deleted?: boolean; once?: boolean }[]; status: string }): string {

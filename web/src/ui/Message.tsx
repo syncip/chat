@@ -1,4 +1,5 @@
-import { Fragment, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { AUDIO_RE, IMAGE_RE, VIDEO_RE } from '../lib/engine';
 import type { Msg, Part } from '../lib/types';
 import { copyText, formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
@@ -24,45 +25,86 @@ export function renderInline(text: string): ReactNode[] {
   return out;
 }
 
-function FilePart({ p }: { p: Extract<Part, { type: 'file' }> }) {
-  const e = useEngine();
-  const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
-  const [img, setImg] = useState<string | null>(null);
-  const [err, setErr] = useState('');
-  const isImg = /^image\/(png|jpeg|gif|webp)$/.test(p.mime);
+const AUTO_IMAGE_MAX = 15 * 1024 * 1024;
 
-  async function load(save: boolean) {
-    setState('loading');
+function fileIcon(name: string, mime: string): string {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  if (mime.startsWith('audio/')) return '🎵';
+  if (mime.startsWith('video/')) return '🎬';
+  if (['pdf'].includes(ext)) return '📕';
+  if (['doc', 'docx', 'odt', 'rtf', 'txt', 'md'].includes(ext)) return '📄';
+  if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return '📊';
+  if (['zip', '7z', 'rar', 'tar', 'gz'].includes(ext)) return '🗜️';
+  if (['exe', 'msi', 'apk', 'bat', 'sh', 'dll'].includes(ext)) return '⚙️';
+  return '📎';
+}
+
+export function saveBlobUrl(url: string, name: string) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
+  a.rel = 'noopener';
+  a.click();
+}
+
+/** Datei in einer Nachricht: Bilder werden direkt angezeigt, Audio/Video per Klick abgespielt, alles andere als Datei-Karte. */
+export function FilePart({ p, compact = false }: { p: Extract<Part, { type: 'file' }>; compact?: boolean }) {
+  const e = useEngine();
+  const kind = IMAGE_RE.test(p.mime) ? 'image' : AUDIO_RE.test(p.mime) ? 'audio' : VIDEO_RE.test(p.mime) ? 'video' : 'file';
+  const [url, setUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [zoom, setZoom] = useState(false);
+
+  async function load(): Promise<string | null> {
+    setBusy(true);
     setErr('');
     try {
-      const blob = await e.downloadFile(p);
-      const url = URL.createObjectURL(blob);
-      if (save) {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = p.name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
-        a.rel = 'noopener';
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      } else setImg(url);
-      setState('idle');
+      const u = await e.mediaUrl(p);
+      setUrl(u);
+      return u;
     } catch (x) {
       setErr((x as Error).message);
-      setState('error');
+      return null;
+    } finally {
+      setBusy(false);
     }
   }
+  async function save() {
+    const u = url ?? (await load());
+    if (u) saveBlobUrl(u, p.name);
+  }
+
+  useEffect(() => {
+    if (kind === 'image' && p.size <= AUTO_IMAGE_MAX) void load();
+  }, [p.blob_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="file">
-      {img && <img src={img} alt={p.name} className="preview" />}
+    <div className={`file ${kind}`}>
+      {kind === 'image' && (
+        url ? <img src={url} alt={p.name} className="preview media-img" onClick={() => setZoom(true)} />
+          : <div className="media-ph" aria-busy={busy}>{busy ? 'Lädt …' : <button className="link" onClick={() => load()}>Bild laden ({formatBytes(p.size)})</button>}</div>
+      )}
+      {kind === 'video' && (url ? <video src={url} controls autoPlay className="media-video" /> : (
+        <button className="media-play" disabled={busy} onClick={() => load()}>{busy ? 'Lädt …' : '▶ Video abspielen'}</button>
+      ))}
+      {kind === 'audio' && (url ? <audio src={url} controls autoPlay className="media-audio" /> : (
+        <button className="media-play audio" disabled={busy} onClick={() => load()}>{busy ? 'Lädt …' : '▶ Audio abspielen'}</button>
+      ))}
       <div className="file-row">
-        <span className="file-name" title={p.name}>📎 {p.name}</span>
-        <span className="muted">{formatBytes(p.size)}</span>
-        {isImg && !img && <button className="link" disabled={state === 'loading'} onClick={() => load(false)}>Vorschau laden</button>}
-        <button className="link" disabled={state === 'loading'} onClick={() => load(true)}>{state === 'loading' ? '…' : 'Speichern'}</button>
+        <span className="file-icon" aria-hidden="true">{fileIcon(p.name, p.mime)}</span>
+        <span className="file-name" title={p.name}>{p.name}</span>
+        <span className="muted small">{formatBytes(p.size)}</span>
+        <button className="link" disabled={busy} onClick={save}>{busy ? '…' : 'Speichern'}</button>
       </div>
-      <div className="muted small">Wird von {p.blob_server} geladen · Dateien werden nie ausgeführt</div>
+      {!compact && <div className="muted small">Von {p.blob_server} geladen und lokal entschlüsselt · Dateien werden nie ausgeführt</div>}
       {err && <div className="error small">{err}</div>}
+      {zoom && url && (
+        <div className="lightbox" onClick={() => setZoom(false)} role="dialog" aria-label={p.name}>
+          <img src={url} alt={p.name} />
+          <button className="lightbox-close" aria-label="Schließen">✕</button>
+        </div>
+      )}
     </div>
   );
 }

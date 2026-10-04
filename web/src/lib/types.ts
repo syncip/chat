@@ -118,6 +118,9 @@ export interface AppState {
   onceDropOwnCopy: boolean;
   /** Öffentliche Kanäle (Schlüssel stehen auch in der Backup-Datei, damit neue Geräte sie bekommen). */
   channels?: Record<string, ChannelState>;
+  /** Bekannte Geräte des Kontos (zur Erkennung neu hinzugefügter Geräte) und offene Sicherheitshinweise. */
+  knownDevices?: string[];
+  alerts?: SecurityAlert[];
 }
 
 export interface ChannelPolicy {
@@ -172,6 +175,13 @@ export interface ChannelState {
   cursor: number;
   unread: number;
   createdAt: number;
+}
+
+export interface SecurityAlert {
+  id: string;
+  kind: 'device' | 'key';
+  text: string;
+  ts: number;
 }
 
 export interface ServerInfo {

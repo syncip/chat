@@ -5,6 +5,7 @@ import { copyText } from '../lib/util';
 import { useEngine } from './hooks';
 import { Dialog } from './Dialog';
 import { Parts } from './Message';
+import { Avatar } from './Avatar';
 
 const DEFAULT_POLICY: ChannelPolicy = { join_mode: 'open', pow_bits: 16, probation_seconds: 0, members_can_write: false, slow_mode_seconds: 0 };
 
@@ -178,6 +179,7 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
     <div className="chat">
       <header className="chat-header">
         <button className="back" onClick={onBack} aria-label="Zurück">←</button>
+        <Avatar name={ch.title} size={40} channel />
         <div className="grow"><strong>📢 {ch.title}</strong>
           <div className="muted small">{ROLE[ch.me.role]} · {ch.server}</div>
         </div>

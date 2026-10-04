@@ -120,7 +120,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation) {
             vm.pendingDraft = null
         }
     }
-    val items = remember(conv.messages) { rows(conv.messages) }
+    val rowList = remember(conv.messages) { rows(conv.messages) }
     LaunchedEffect(conv.messages.size) {
         if (listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
         vm.engine.markRead(conv.id)
@@ -191,7 +191,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation) {
                     Modifier.fillMaxSize().testTag("messages"), state = listState, reverseLayout = true,
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                 ) {
-                    items(items, key = { r -> when (r) { is Row0.M -> r.m.id; is Row0.Day -> "d" + r.ts } }) { r ->
+                    items(rowList, key = { r -> when (r) { is Row0.M -> r.m.id; is Row0.Day -> "d" + r.ts } }) { r ->
                         when (r) {
                             is Row0.Day -> DaySeparator(dayLabel(r.ts))
                             is Row0.M -> MessageRow(
@@ -200,7 +200,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation) {
                             )
                         }
                     }
-                    if (items.isEmpty()) item {
+                    if (rowList.isEmpty()) item {
                         Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                             Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.tertiaryContainer) {
                                 Text(

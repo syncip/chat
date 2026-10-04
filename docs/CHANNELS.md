@@ -66,3 +66,13 @@ Die App weist an mehreren Stellen ausdrücklich darauf hin. Schreiben dürfen we
 - Der Beitritt offenbart dem Kanal-Server die IP und die Adresse des Nutzers; Tor/VPN empfohlen.
 - Dateianhänge in Kanälen (Bilder, Audio, Video, beliebige Dateien): Die Datei wird wie im Chat Ende-zu-Ende verschlüsselt auf den Heimserver des Absenders hochgeladen (Blob-Aufbewahrung und Kontingent gelten); der Dateischlüssel steht im (kanalverschlüsselten) Beitrag. In **öffentlichen** Kanälen liegt dieser Schlüssel im Klartext-Beitrag, die Datei ist damit für jeden lesbar. Webhooks können keine Dateien senden (nur Text).
 - Der Besitzer ist ein Konto des Kanal-Servers; verliert er den AIK (Backup!), ist der Kanal nicht mehr verwaltbar.
+
+## Sichtbarkeit nachträglich ändern (v0.2)
+
+Der Besitzer kann einen Kanal in den Einstellungen von **privat** auf **öffentlich** und zurück stellen.
+
+- **privat → öffentlich:** neue Beiträge sind unverschlüsselt und ohne Konto lesbar; ältere verschlüsselte Beiträge bleiben verschlüsselt (Mitglieder lesen sie mit dem früheren Schlüssel).
+- **öffentlich → privat:** es entsteht ein **neuer Kanalschlüssel**. Der öffentliche Link funktioniert nicht mehr, Mitglieder fügen den neuen Einladungslink ein (Hinweis im Kanal). Ältere öffentliche Beiträge bleiben auf dem Server im Klartext, Mitglieder können sie weiter lesen. Webhooks erhalten den neuen Schlüssel automatisch.
+- Gruppen sind immer privat (Ende-zu-Ende per MLS); ihr Name, Bild, Verschwinde-Timer und die Mitglieder lassen sich jederzeit ändern.
+
+Wartende Beitrittsanfragen (Modus „Freigabe“) werden Besitzer und Moderation im Kanal als ausblendbarer Hinweis angezeigt.

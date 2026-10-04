@@ -206,6 +206,7 @@ export interface ServerInfo {
   domain: string;
   version: number;
   app_version?: string;
+  min_passphrase?: number;
   registration: 'invite' | 'open' | 'closed';
   federation: string;
   client_hash: string;

@@ -143,7 +143,7 @@ function ChatHeader({ conv, onBack, onInfo, onFiles }: { conv: Conversation; onB
       <button className="back" onClick={onBack} aria-label="Zurück">←</button>
       <Avatar name={conv.title} size={40} src={e.avatarOfConv(conv)} />
       <div className="grow"><strong>{conv.title}</strong>
-        <div className="muted small">{conv.kind === 'group' ? `${memberAddresses(conv).length} Mitglieder` : 'Ende-zu-Ende-verschlüsselt'}{conv.disappearSeconds ? ` · ⏱ ${fmtDur(conv.disappearSeconds)}` : ''}</div>
+        <div className="muted small">{e.isSelfChat(conv) ? 'Nur du · Notizen & Dateiablage' : conv.kind === 'group' ? `${memberAddresses(conv).length} Mitglieder` : 'Ende-zu-Ende-verschlüsselt'}{conv.disappearSeconds ? ` · ⏱ ${fmtDur(conv.disappearSeconds)}` : ''}</div>
       </div>
       <button className={`sec-chip ${sec.level}`} onClick={onInfo} title="Sicherheitsnummer vergleichen">🔒 {sec.label}</button>
       <button onClick={onFiles} title="Dateien in diesem Chat" aria-label="Dateien">📁</button>

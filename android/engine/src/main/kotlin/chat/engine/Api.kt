@@ -29,6 +29,8 @@ fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(60, TimeUnit.SECONDS)
     .writeTimeout(120, TimeUnit.SECONDS)
+    // WebSocket-Ping: erkennt tote Verbindungen (Mobilfunk-/NAT-Abbrüche, Doze) und löst das Neuverbinden samt Nachholen aus.
+    .pingInterval(20, TimeUnit.SECONDS)
     .followRedirects(false)
     .followSslRedirects(false)
     .build()

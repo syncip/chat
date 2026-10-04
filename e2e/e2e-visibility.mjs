@@ -13,7 +13,8 @@ try {
   await register(alice, P, 'alice');
   await register(bob, P, 'bob');
 
-  await alice.getByTitle('Kanal erstellen').click();
+  await alice.getByTitle('Hinzufügen').click();
+  await alice.getByRole('button', { name: 'Kanal erstellen' }).click();
   const d = alice.getByRole('dialog', { name: 'Neuer öffentlicher Kanal' });
   await d.getByLabel('Name').fill('Wechsel');
   await d.getByRole('button', { name: 'Kanal erstellen' }).click();
@@ -24,10 +25,10 @@ try {
   const link1 = await info.locator('input[readonly]').first().inputValue();
   await alice.keyboard.press('Escape');
 
-  await bob.getByTitle('Kanal beitreten').click();
+  await bob.getByTitle('Hinzufügen').click();
+  await bob.getByLabel('Link oder Chat-Code').fill(link1);
+  await bob.getByRole('button', { name: 'Weiter' }).click();
   const jd = bob.getByRole('dialog', { name: 'Kanal beitreten' });
-  await jd.getByPlaceholder('https://…/#/join/…').fill(link1);
-  await jd.getByRole('button', { name: 'Prüfen' }).click();
   await jd.getByRole('button', { name: 'Beitreten' }).click();
   await bob.locator('.chat-header', { hasText: 'Wechsel' }).waitFor({ timeout: 30000 });
   await bob.getByText('privat-alt').waitFor({ timeout: 20000 });

@@ -33,6 +33,7 @@ services:
       CHAT_MAX_CHANNELS: ${CHAT_MAX_CHANNELS:-10}              # Kanäle je Nutzer
       CHAT_MAX_CHANNEL_MEMBERS: ${CHAT_MAX_CHANNEL_MEMBERS:-5000}
       CHAT_MAX_HOOKS: ${CHAT_MAX_HOOKS:-5}                     # Webhooks je Kanal
+      CHAT_MIN_PASSPHRASE: ${CHAT_MIN_PASSPHRASE:-8}           # Mindestlänge der Passphrase (Clients erzwingen sie)
       CHAT_TRUST_PROXY_HEADER: ${CHAT_TRUST_PROXY_HEADER:-}
     volumes:
       - chat-data:/data

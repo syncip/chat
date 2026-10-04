@@ -5,7 +5,7 @@ import { useEngine } from './hooks';
 import { AvatarPicker } from './Avatar';
 import { QrCode } from './QrCode';
 import { enrollPasskey, hasPasskey, passkeySupported, removePasskey } from '../lib/passkey';
-import { minPassLength, setMinPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, idleLockMinutes, setIdleLockMinutes, type RememberMode } from '../lib/prefs';
+import { minPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, idleLockMinutes, setIdleLockMinutes, type RememberMode } from '../lib/prefs';
 import { soundEnabled, setSoundEnabled, playNotify } from '../lib/sound';
 import { clearSession, persistentAvailable } from '../lib/session';
 import { Dialog } from './Dialog';
@@ -21,7 +21,6 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const [newAllow, setNewAllow] = useState('');
   const [backupPass, setBackupPass] = useState('');
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
-  const [minLen, setMinLen] = useState(minPassLength());
   const [remember, setRemember] = useState<RememberMode>(rememberMode());
   const [idle, setIdle] = useState(idleLockMinutes());
   const [sound, setSound] = useState(soundEnabled());
@@ -67,10 +66,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
         <label className="check">
           <input type="checkbox" checked={sound} onChange={(x) => { setSound(x.target.checked); setSoundEnabled(x.target.checked); if (x.target.checked) playNotify(); }} /> Benachrichtigungston bei neuen Nachrichten
         </label>
-        <label>Mindestlänge für Passphrasen (Backup, neue Konten)
-          <input type="number" min={1} max={128} value={minLen} onChange={(x) => { const n = Math.min(128, Math.max(1, Number(x.target.value) || 1)); setMinLen(n); setMinPassLength(n); }} />
-          {minLen < 8 && <span className="warn">Sehr kurze Passphrasen sind leicht zu erraten.</span>}
-        </label>
+        <p className="muted small">Mindestlänge für Passphrasen (Backup, neue Konten): {minPassLength()} Zeichen, vom Server-Admin festgelegt.</p>
         <button onClick={() => { void clearSession(); void e.lock(); }}>Jetzt sperren</button>
       </section>
       <section>

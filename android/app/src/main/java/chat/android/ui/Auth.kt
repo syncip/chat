@@ -95,6 +95,7 @@ fun OnboardingScreen(vm: AppViewModel) {
                     probe = "Prüfe …"
                     vm.run(onError = { probe = "✗ $it" }) {
                         val i = vm.engine.probeServer(server)
+                        if (i.min_passphrase > 0) vm.prefs.minPassphrase = i.min_passphrase
                         probe = "✓ ${i.domain}" + (i.app_version?.let { " (v$it)" } ?: "") + " · Registrierung: " + when (i.registration) { "open" -> "offen"; "invite" -> "nur mit Einladungscode"; else -> "geschlossen" }
                     }
                 }) { Text("Server prüfen") }
@@ -108,13 +109,7 @@ fun OnboardingScreen(vm: AppViewModel) {
         }
         Field(if (restore || qrMode) "Neue Passphrase für dieses Gerät" else "Passphrase (schützt deine Schlüssel lokal)", pass, { pass = it }, password = true)
         Field("Passphrase wiederholen", pass2, { pass2 = it }, password = true)
-        var minLen by remember { mutableStateOf(vm.prefs.minPassphrase.toString()) }
-        OutlinedTextField(
-            value = minLen, onValueChange = { v -> minLen = v.filter { it.isDigit() }.take(3); minLen.toIntOrNull()?.let { vm.prefs.minPassphrase = it } },
-            label = { Text("Mindestlänge der Passphrase (auf diesem Gerät)") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
-        )
-        if ((minLen.toIntOrNull() ?: 10) < 8) Text("Sehr kurze Passphrasen sind leicht zu erraten.", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
+        Text("Mindestlänge der Passphrase: ${vm.prefs.minPassphrase} Zeichen (vom Betreiber des Servers festgelegt).", style = MaterialTheme.typography.bodySmall)
         Text(
             "Es gibt kein „Passwort vergessen“. Ohne Passphrase und ohne Backup ist dein Konto verloren.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary,

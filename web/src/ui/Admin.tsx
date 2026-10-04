@@ -30,6 +30,7 @@ const FIELDS: { key: string; label: string; kind: 'text' | 'number' | 'bool' | '
   { key: 'max_post_size', label: 'Max. Beitragsgröße (Bytes)', kind: 'number' },
   { key: 'channel_retention_days', label: 'Kanal-Beiträge aufbewahren (Tage)', kind: 'number' },
   { key: 'max_hooks', label: 'Webhooks je Kanal', kind: 'number' },
+  { key: 'min_passphrase', label: 'Mindestlänge der Passphrase (Zeichen, für neue Konten und Backups)', kind: 'number' },
 ];
 
 const STAT_LABELS: [string, string][] = [

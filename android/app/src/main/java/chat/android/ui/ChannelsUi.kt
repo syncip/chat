@@ -5,7 +5,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -154,14 +157,15 @@ fun CreateChannelDialog(vm: AppViewModel, onClose: () -> Unit, onCreated: (Strin
 }
 
 @Composable
-fun JoinChannelDialog(vm: AppViewModel, onClose: () -> Unit, onJoined: (String) -> Unit) {
-    var link by remember { mutableStateOf("") }
+fun JoinChannelDialog(vm: AppViewModel, onClose: () -> Unit, onJoined: (String) -> Unit, initial: String = "") {
+    var link by remember { mutableStateOf(initial) }
     var info by remember { mutableStateOf<ChannelPreview?>(null) }
     var captcha by remember { mutableStateOf<NeedsCaptcha?>(null) }
     var answer by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val clip = LocalClipboardManager.current
+    LaunchedEffect(Unit) { if (initial.isNotBlank()) vm.run(onError = { err = it }) { info = vm.engine.previewChannel(initial) } }
     val modeText = mapOf(
         "open" to "Direkter Zugriff.", "approval" to "Die Moderation muss dich freigeben.",
         "pow" to "Dein Gerät löst beim Beitritt eine kleine Rechenaufgabe (kann einige Sekunden dauern).", "captcha" to "Du musst ein Captcha lösen.",
@@ -271,6 +275,25 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
             if (ch.policy.isPublic) Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
                 Text("🌐 Öffentlicher Kanal: Inhalte sind unverschlüsselt und für jeden ohne Konto lesbar.", Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
             }
+            var pendingN by remember { mutableStateOf(0) }
+            var dismissedN by remember { mutableStateOf(0) }
+            LaunchedEffect(ch.id, isMod, ch.policy.join_mode, ch.events.size) {
+                if (!isMod || ch.policy.join_mode == "open") { pendingN = 0; return@LaunchedEffect }
+                while (true) {
+                    runCatching { pendingN = vm.engine.channelMembers(ch.id, "pending").size }
+                    kotlinx.coroutines.delay(20_000)
+                }
+            }
+            if (pendingN > dismissedN) Surface(color = MaterialTheme.colorScheme.tertiaryContainer, modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "👋 " + (if (pendingN == 1) "1 Person wartet" else "$pendingN Personen warten") + " auf Freigabe für diesen Kanal.",
+                        Modifier.weight(1f).clickable { info = true }.padding(vertical = 10.dp), style = MaterialTheme.typography.bodySmall,
+                    )
+                    TextButton(onClick = { info = true }) { Text("Prüfen") }
+                    TextButton(onClick = { dismissedN = pendingN }) { Text("✕") }
+                }
+            }
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(ch.posts, key = { it.id }) { p -> PostRow(vm, ch, p, mine = p.from == s.me.address, isMod = isMod) }
             }
@@ -287,21 +310,32 @@ fun ChannelScreen(vm: AppViewModel, s: AppState, ch: ChannelState, onBack: () ->
             } else if (blocker.isNotEmpty()) {
                 Text(blocker, Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { pick.launch("*/*") }) { Text("📎") }
-                    TextButton(onClick = { codeMode = !codeMode }) { Text(if (codeMode) "</> ✓" else "</>") }
+                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    var attachMenu by remember { mutableStateOf(false) }
+                    Box {
+                        TextButton(onClick = { attachMenu = true }, modifier = Modifier.height(52.dp)) { Text("＋", style = MaterialTheme.typography.titleLarge) }
+                        DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                            DropdownMenuItem(text = { Text("📎 Datei / Foto anhängen") }, onClick = { attachMenu = false; pick.launch("*/*") })
+                            DropdownMenuItem(text = { Text(if (codeMode) "</> Codeblock ausschalten" else "</> Codeblock") }, onClick = { attachMenu = false; codeMode = !codeMode })
+                        }
+                    }
                     Column(Modifier.weight(1f)) {
                         if (files.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             files.forEach { u -> androidx.compose.material3.FilterChip(selected = true, onClick = { files = files - u }, label = { Text(u.lastPathSegment ?: "Datei") }) }
                         }
                         if (codeMode) OutlinedTextField(value = lang, onValueChange = { lang = it }, placeholder = { Text("Sprache") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(
-                            value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().heightIn(max = 180.dp),
+                            value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                            minLines = 1, maxLines = 6, shape = RoundedCornerShape(26.dp),
                             placeholder = { Text(if (codeMode) "Code …" else "Beitrag …") },
-                            textStyle = if (codeMode) MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace) else MaterialTheme.typography.bodyMedium,
+                            textStyle = if (codeMode) MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace) else MaterialTheme.typography.bodyLarge,
                         )
                     }
-                    Button(enabled = !busy && (text.isNotBlank() || files.isNotEmpty()), onClick = { send() }) { Text(if (busy) "…" else "Senden") }
+                    Button(
+                        enabled = !busy && (text.isNotBlank() || files.isNotEmpty()), onClick = { send() },
+                        shape = androidx.compose.foundation.shape.CircleShape, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                        modifier = Modifier.size(52.dp),
+                    ) { Text(if (busy) "…" else "➤", style = MaterialTheme.typography.titleMedium) }
                 }
             }
         }

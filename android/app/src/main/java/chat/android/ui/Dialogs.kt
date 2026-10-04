@@ -1,6 +1,8 @@
 package chat.android.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -27,40 +29,57 @@ import androidx.compose.ui.unit.dp
 import chat.engine.AppState
 import chat.engine.decodeCard
 
+/** Ein Dialog für alles Neue: Link, Code oder QR-Code (die App erkennt, ob es ein Kontakt, ein Chat-Code oder ein Kanal ist) oder etwas erstellen. */
 @Composable
-fun StartChatDialog(vm: AppViewModel, onClose: () -> Unit, onStarted: (String) -> Unit) {
+fun AddDialog(
+    vm: AppViewModel, onClose: () -> Unit, onStarted: (String) -> Unit, onGroup: () -> Unit, onChannel: () -> Unit, onJoinedChannel: (String) -> Unit,
+) {
     var link by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var joinLink by remember { mutableStateOf<String?>(null) }
     val clip = LocalClipboardManager.current
-    fun start(input: String) {
+    fun go(input: String) {
         busy = true; err = ""
         vm.run(onError = { err = it; busy = false }) {
             val t = input.trim()
+            val join = Regex("#/join/[A-Za-z0-9_-]+").find(t)?.value
+            if (join != null) { busy = false; joinLink = join; return@run }
             val isCode = t.length <= 80 && Regex("^[A-Za-z0-9][A-Za-z0-9_-]{2,39}(@[A-Za-z0-9.:-]+)?$").matches(t)
             val id = vm.engine.startChat(if (isCode) vm.engine.resolveChatCode(t) else decodeCard(input))
             busy = false
             onStarted(id)
         }
     }
-    val scan = rememberQrScanner("QR-Code eines Kontakts scannen") { text -> link = text; start(text) }
+    val scan = rememberQrScanner("QR-Code scannen (Kontakt oder Kanal)") { text -> link = text; go(text) }
+    joinLink?.let { j ->
+        JoinChannelDialog(vm, onClose = { joinLink = null }, onJoined = { id -> joinLink = null; onJoinedChannel(id) }, initial = j)
+        return
+    }
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Neuer Chat") },
+        title = { Text("Hinzufügen") },
         text = {
-            Column {
-                Text("Gib den Chat-Code deines Gegenübers ein (z. B. martinistcool, bei anderen Servern code@server), füge seinen Kontaktlink ein oder scanne seinen QR-Code. Nur wer dir Code oder Link gibt, kann angeschrieben werden.", style = MaterialTheme.typography.bodySmall)
-                OutlinedTextField(value = link, onValueChange = { link = it }, minLines = 2, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Chat-Code oder https://…/#/add/…") })
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Füge einen Link oder Code ein oder scanne einen QR-Code: Kontaktlink oder Chat-Code (z. B. martinistcool, bei anderen Servern code@server) startet einen Chat, ein Kanal-Link tritt einem Kanal bei. Die App erkennt selbst, worum es geht.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value = link, onValueChange = { link = it }, minLines = 2, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Link, Einladung oder Chat-Code") })
                 Row {
                     TextButton(onClick = scan) { Text("QR-Code scannen") }
                     TextButton(onClick = { clip.getText()?.text?.let { link = it } }) { Text("Einfügen") }
                 }
                 if (err.isNotEmpty()) Text(err, color = MaterialTheme.colorScheme.error)
+                Text("Oder neu erstellen", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                Row {
+                    TextButton(onClick = onGroup) { Text("👥 Gruppe") }
+                    TextButton(onClick = onChannel) { Text("📢 Kanal") }
+                    TextButton(enabled = !busy, onClick = {
+                        busy = true; err = ""
+                        vm.run(onError = { err = it; busy = false }) { val id = vm.engine.openSelfChat(); busy = false; onStarted(id) }
+                    }) { Text("📝 Notizen") }
+                }
             }
         },
-        confirmButton = {
-            Button(enabled = !busy && link.isNotBlank(), onClick = { start(link) }) { Text(if (busy) "…" else "Chat starten") }
-        },
+        confirmButton = { Button(enabled = !busy && link.isNotBlank(), onClick = { go(link) }) { Text(if (busy) "…" else "Weiter") } },
         dismissButton = { TextButton(onClick = onClose) { Text("Abbrechen") } },
     )
 }

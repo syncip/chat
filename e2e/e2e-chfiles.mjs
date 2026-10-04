@@ -32,7 +32,8 @@ try {
   browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox', '--no-proxy-server'] });
   const page = await (await browser.newContext()).newPage();
   await register(page, P, 'alice');
-  await page.getByTitle('Kanal erstellen').click();
+  await page.getByTitle('Hinzufügen').click();
+  await page.getByRole('button', { name: 'Kanal erstellen' }).click();
   const d = page.getByRole('dialog', { name: 'Neuer öffentlicher Kanal' });
   await d.getByLabel('Name').fill('Bilder');
   await d.getByRole('button', { name: 'Kanal erstellen' }).click();

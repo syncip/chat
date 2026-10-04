@@ -92,6 +92,7 @@ Benötigt: Rust (+ `wasm32-unknown-unknown`, `wasm-bindgen-cli 0.2.129`), Go ≥
 | `CHAT_FEDERATION_ALLOW_PRIVATE` | `false` | Föderation mit privaten/lokalen Adressen (LAN) erlauben |
 | `CHAT_CHANNELS` / `CHAT_MAX_CHANNELS` / `CHAT_MAX_CHANNEL_MEMBERS` | an / 10 / 5000 | öffentliche Kanäle: Schalter, Kanäle je Nutzer, Mitglieder je Kanal |
 | `CHAT_MAX_HOOKS` | 5 | Webhooks je Kanal (auch zur Laufzeit vom Admin änderbar) |
+| `CHAT_MIN_PASSPHRASE` | 8 | Mindestlänge der Passphrase für neue Konten und Backups (auch zur Laufzeit vom Admin änderbar) |
 | `CHAT_TRUST_PROXY_HEADER` | – | Header mit Client-IP hinter Tunnel/Proxy (nur für Rate-Limits) |
 
 ## Dokumente

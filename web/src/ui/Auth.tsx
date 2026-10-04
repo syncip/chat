@@ -24,6 +24,9 @@ export function Onboarding() {
   const [restore, setRestore] = useState(false);
   const [bpass, setBpass] = useState('');
   const [minLen, setMinLen] = useState(minPassLength());
+  useEffect(() => { // Mindestlänge legt der Admin des Servers fest
+    fetch('/v1/server-info').then((r) => r.json()).then((j: { min_passphrase?: number }) => { if (j.min_passphrase) { setMinPassLength(j.min_passphrase); setMinLen(j.min_passphrase); } }).catch(() => undefined);
+  }, []);
 
   async function submit(ev: React.FormEvent) {
     ev.preventDefault();
@@ -71,10 +74,7 @@ export function Onboarding() {
           <input type="password" value={pass} onChange={(x) => setPass(x.target.value)} autoComplete="new-password" required />
         </label>
         <label>Passphrase wiederholen<input type="password" value={pass2} onChange={(x) => setPass2(x.target.value)} autoComplete="new-password" required /></label>
-        <label>Mindestlänge der Passphrase (auf diesem Gerät)
-          <input type="number" min={1} max={128} value={minLen} onChange={(x) => { const n = Math.min(128, Math.max(1, Number(x.target.value) || 1)); setMinLen(n); setMinPassLength(n); }} />
-          {minLen < 8 && <span className="warn">Sehr kurze Passphrasen sind leicht zu erraten. Wer Zugriff auf die verschlüsselten Daten bekommt, kann sie durchprobieren.</span>}
-        </label>
+        <p className="muted small">Mindestlänge der Passphrase: {minLen} Zeichen (vom Betreiber dieses Servers festgelegt).</p>
         <p className="warn">Es gibt kein „Passwort vergessen“. Ohne Passphrase und ohne Backup ist dein Konto verloren.</p>
         {err && <p className="error" role="alert">{err}</p>}
         <button className="primary" disabled={busy}>{busy ? 'Bitte warten …' : restore ? 'Gerät anmelden' : 'Konto erstellen'}</button>

@@ -19,7 +19,8 @@ try {
   console.log('✔ Alice ist mit Bob (föderiert) und Carol verbunden');
 
   // Gruppe erstellen
-  await alice.getByTitle('Neue Gruppe').click();
+  await alice.getByTitle('Hinzufügen').click();
+  await alice.getByRole('button', { name: 'Gruppe erstellen' }).click();
   await alice.getByLabel('Name').fill('Projekt X');
   await alice.getByLabel(`bob@${H}:18091`).check();
   await alice.getByLabel(`carol@${H}:18090`).check();

@@ -225,6 +225,7 @@ data class ServerInfo(
     val domain: String,
     val version: Int,
     val app_version: String? = null,
+    val min_passphrase: Int = 0,
     val registration: String,
     val federation: String,
     val client_hash: String = "",

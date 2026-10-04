@@ -8,7 +8,8 @@ let browser;
 const base = `http://${H}:${P}`;
 
 async function createChannel(page, title, { pub = false, mode = 'open' } = {}) {
-  await page.getByTitle('Kanal erstellen').click();
+  await page.getByTitle('Hinzufügen').click();
+  await page.getByRole('button', { name: 'Kanal erstellen' }).click();
   const d = page.getByRole('dialog', { name: 'Neuer öffentlicher Kanal' });
   await d.getByLabel('Name').fill(title);
   await d.getByLabel('Beitritt').selectOption(mode);
@@ -45,8 +46,10 @@ try {
   await dlg.getByText('Gespeichert und aktiv').waitFor();
   assert.equal((await (await fetch(`${base}/v1/server-info`)).json()).registration, 'closed');
   await dlg.getByLabel(/^Registrierung/).selectOption('invite');
+  await dlg.getByLabel(/^Mindestlänge der Passphrase/).fill('6');
   await dlg.getByRole('button', { name: 'Speichern' }).click();
   await dlg.getByText('Gespeichert und aktiv').waitFor();
+  assert.equal((await (await fetch(`${base}/v1/server-info`)).json()).min_passphrase, 6, 'Admin legt Mindestlänge fest');
   await dlg.getByRole('tab', { name: 'Nutzer' }).click();
   await dlg.getByText('bob').waitFor();
   await dlg.getByLabel('Nutzer suchen').fill('BO');
@@ -116,7 +119,7 @@ try {
   await sleep(3000); // Gerät 1 gibt Änderungen entprellt weiter
   await alice2.goto(`${base}/`);
   await alice2.evaluate(() => localStorage.setItem('chat.minPass', '4'));
-  await linkDevice(alice2, P, aliceBackup, 'abcd');
+  await linkDevice(alice2, P, aliceBackup, 'abcdef');
   await alice2.locator('.conv', { hasText: 'Wetter' }).waitFor({ timeout: 30000 });
   await alice2.locator('.conv', { hasText: 'Intern' }).waitFor({ timeout: 30000 });
   console.log('✔ Sync: Kanäle erscheinen auf dem zweiten Gerät');

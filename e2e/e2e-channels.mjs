@@ -8,7 +8,8 @@ let browser;
 const addr = (n) => `${n}@${H}:${P}`;
 
 async function createChannel(page, title, mode) {
-  await page.getByTitle('Kanal erstellen').click();
+  await page.getByTitle('Hinzufügen').click();
+  await page.getByRole('button', { name: 'Kanal erstellen' }).click();
   const d = page.getByRole('dialog', { name: 'Neuer öffentlicher Kanal' });
   await d.getByLabel('Name').fill(title);
   if (mode) await d.getByLabel('Beitritt').selectOption(mode);
@@ -22,10 +23,10 @@ async function createChannel(page, title, mode) {
 }
 
 async function joinChannel(page, link, title, expectError) {
-  await page.getByTitle('Kanal beitreten').click();
+  await page.getByTitle('Hinzufügen').click();
+  await page.getByLabel('Link oder Chat-Code').fill(link);
+  await page.getByRole('button', { name: 'Weiter' }).click();
   const d = page.getByRole('dialog', { name: 'Kanal beitreten' });
-  await d.getByPlaceholder('https://…/#/join/…').fill(link);
-  await d.getByRole('button', { name: 'Prüfen' }).click();
   await d.getByText(title, { exact: true }).waitFor();
   await d.getByRole('button', { name: 'Beitreten' }).click();
   if (expectError) return d;
@@ -90,12 +91,18 @@ try {
   const appr = await createChannel(alice, 'Intern', 'approval');
   await joinChannel(carol, appr, 'Intern');
   await carol.getByText(/muss noch von der Moderation freigegeben/).waitFor();
+  // Hinweis für die Moderation (ausblendbar)
+  const note = alice.locator('.alert-bar', { hasText: /wartet auf Freigabe/ });
+  await note.waitFor({ timeout: 30000 });
+  await note.getByRole('button', { name: 'Hinweis schließen' }).click();
+  await note.waitFor({ state: 'detached' });
   await memberAction(alice, addr('carol'), (li) => li.getByRole('button', { name: 'Freigeben' }).click());
   await carol.getByText('In diesem Kanal darfst du nur lesen.').waitFor({ timeout: 20000 });
   console.log('✔ Beitritt mit Freigabe');
 
   // --- Proof-of-Work ---
-  await alice.getByTitle('Kanal erstellen').click();
+  await alice.getByTitle('Hinzufügen').click();
+  await alice.getByRole('button', { name: 'Kanal erstellen' }).click();
   const d = alice.getByRole('dialog', { name: 'Neuer öffentlicher Kanal' });
   await d.getByLabel('Name').fill('Pow');
   await d.getByLabel('Beitritt').selectOption('pow');

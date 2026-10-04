@@ -1,9 +1,9 @@
-// Profil-, Gruppen- und Kanalbilder.
-import { chromium, CHROME, startServer, waitUp, register, contactLink, connect, H } from './helpers.mjs';
+// Notizen an mich: Chat nur mit dem eigenen Konto als Dateiablage, auch auf einem zweiten Gerät.
+import { chromium, CHROME, startServer, waitUp, register, linkDevice, send, seen } from './helpers.mjs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
-const P = 18110;
+const P = 18112;
 const server = startServer(P);
 let browser;
 function crc32(buf) {
@@ -26,41 +26,30 @@ function wav() { // 0,1 s Stille, 8 kHz mono 8 bit
   return Buffer.concat([h, Buffer.alloc(n, 128)]);
 }
 
-const file = () => ({ name: 'bild.png', mimeType: 'image/png', buffer: png() });
 try {
   await waitUp(P);
   browser = await chromium.launch({ executablePath: CHROME, args: ['--no-sandbox', '--no-proxy-server'] });
   const mk = async () => (await browser.newContext()).newPage();
-  const [alice, bob] = [await mk(), await mk()];
-  await register(alice, P, 'alice');
-  await register(bob, P, 'bob');
-  await connect(bob, alice, await contactLink(alice), `bob@${H}:${P}`);
-
-  // Profilbild: Alice setzt es, Bob sieht es in der Chatliste
-  await alice.getByTitle('Einstellungen').click();
-  const sd = alice.getByRole('dialog', { name: 'Einstellungen' });
-  await sd.getByLabel('Profilbild wählen').setInputFiles(file());
-  await sd.getByText('Profilbild gesetzt.').waitFor({ timeout: 15000 });
-  await alice.keyboard.press('Escape');
-  await bob.locator('.conv img.avatar').first().waitFor({ timeout: 25000 });
-  console.log('✔ Profilbild kommt beim Chat-Partner an');
-
-  // Kanalbild
+  const [alice, alice2] = [await mk(), await mk()];
+  const backup = await register(alice, P, 'alice');
   await alice.getByTitle('Hinzufügen').click();
-  await alice.getByRole('button', { name: 'Kanal erstellen' }).click();
-  const d = alice.getByRole('dialog', { name: 'Neuer öffentlicher Kanal' });
-  await d.getByLabel('Name').fill('Fotos');
-  await d.getByRole('button', { name: 'Kanal erstellen' }).click();
-  await alice.locator('.chat-header', { hasText: 'Fotos' }).waitFor({ timeout: 20000 });
-  await alice.getByLabel('Details').click();
-  const cd = alice.getByRole('dialog', { name: 'Fotos' });
-  await cd.getByLabel('Kanalbild wählen').setInputFiles(file());
-  await cd.getByRole('button', { name: 'Bild entfernen' }).waitFor({ timeout: 15000 });
-  await alice.keyboard.press('Escape');
-  await alice.locator('.chat-header img.avatar').waitFor({ timeout: 15000 });
-  await alice.locator('.convs .conv', { hasText: 'Fotos' }).locator('img.avatar').waitFor();
-  console.log('✔ Kanalbild gesetzt');
-  console.log('AVATARS-E2E BESTANDEN');
+  await alice.getByRole('button', { name: /Notizen an mich/ }).click();
+  await alice.locator('.chat-header', { hasText: 'Notizen' }).waitFor({ timeout: 20000 });
+  await send(alice, 'Mein erster Merkzettel');
+  await seen(alice, 'Mein erster Merkzettel');
+  await alice.locator('input[type=file]').setInputFiles({ name: 'ablage.png', mimeType: 'image/png', buffer: png() });
+  await alice.getByRole('button', { name: 'Senden' }).click();
+  await alice.locator('.messages img').first().waitFor({ timeout: 20000 });
+  console.log('✔ Notizen an mich: Text und Datei');
+
+  // zweites Gerät bekommt den Notiz-Chat und neue Einträge
+  await linkDevice(alice2, P, backup);
+  await alice2.locator('.conv', { hasText: 'Notizen' }).waitFor({ timeout: 60000 });
+  await alice2.locator('.conv', { hasText: 'Notizen' }).click();
+  await send(alice2, 'Vom zweiten Gerät');
+  await seen(alice, 'Vom zweiten Gerät');
+  console.log('✔ Notizen auf zweitem Gerät, Nachrichten laufen in beide Richtungen');
+  console.log('NOTES-E2E BESTANDEN');
 } catch (e) {
   console.error('FAIL', e);
   process.exitCode = 1;

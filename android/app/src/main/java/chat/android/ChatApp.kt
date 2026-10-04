@@ -29,6 +29,12 @@ class ChatApp : Application() {
         appScope.launch { engine.init() }
         // Benachrichtigung ohne Inhalt, wenn die App nicht sichtbar ist.
         appScope.launch { engine.newMessages.collect { if (!visible) Notifications.newMessage(this@ChatApp) else if (prefs.inAppSound) Notifications.playInApp(this@ChatApp) } }
+        // Neues Netz (WLAN ↔ Mobilfunk, Verbindung wieder da): sofort neu verbinden und Nachrichten nachholen.
+        runCatching {
+            getSystemService(android.net.ConnectivityManager::class.java).registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) { engine.nudge() }
+            })
+        }
         // Hintergrunddienst folgt dem Entsperr-Zustand.
         appScope.launch {
             engine.phase.collect { p ->
@@ -39,6 +45,7 @@ class ChatApp : Application() {
 
     fun onForeground() {
         visible = true
+        engine.nudge()
         lockJob?.cancel()
         Notifications.clearMessages(this)
     }

@@ -299,14 +299,15 @@ func (s *Server) wellKnown(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serverInfo(w http.ResponseWriter, r *http.Request) {
 	c := s.conf()
 	writeJSON(w, 200, map[string]any{
-		"domain":       c.Domain,
-		"version":      apiVersion,
-		"app_version":  AppVersion,
-		"registration": c.Registration,
-		"federation":   c.Federation,
-		"server_key":   b64.EncodeToString(s.key.Public().(ed25519.PublicKey)),
-		"client_hash":  s.webHash,
-		"pow_bits":     s.powBits(),
+		"domain":         c.Domain,
+		"version":        apiVersion,
+		"app_version":    AppVersion,
+		"registration":   c.Registration,
+		"federation":     c.Federation,
+		"server_key":     b64.EncodeToString(s.key.Public().(ed25519.PublicKey)),
+		"client_hash":    s.webHash,
+		"pow_bits":       s.powBits(),
+		"min_passphrase": c.MinPassphrase,
 		"limits": map[string]any{
 			"max_file_size":           c.MaxFileSize,
 			"max_message_attachments": c.MaxAttachments,

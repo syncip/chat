@@ -167,6 +167,18 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
 
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }); e.channels.markRead(ch.id); }, [ch.posts.length, ch.id, e]);
 
+  // Wartende Beitrittsanfragen: Hinweis für Besitzer und Moderation (ausblendbar, erscheint wieder bei neuen Anfragen).
+  const [pendingN, setPendingN] = useState(0);
+  const [dismissedN, setDismissedN] = useState(0);
+  useEffect(() => {
+    if (!isMod || ch.policy.join_mode === 'open') { setPendingN(0); return; }
+    let stop = false;
+    const load = () => e.channels.members(ch.id, 'pending').then((m) => { if (!stop) setPendingN(m.length); }).catch(() => undefined);
+    void load();
+    const t = setInterval(load, 20_000);
+    return () => { stop = true; clearInterval(t); };
+  }, [isMod, ch.id, ch.policy.join_mode, ch.events.length, e]);
+
   async function send() {
     setBusy(true);
     setErr('');
@@ -201,6 +213,13 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
         <button onClick={() => setInfo(true)} aria-label="Details">ⓘ</button>
       </header>
       {ch.policy.public && <div className="banner bad" role="note">🌐 Öffentlicher Kanal: Inhalte sind unverschlüsselt und für jeden ohne Konto lesbar.</div>}
+      {pendingN > dismissedN && (
+        <div className="alert-bar" role="note">
+          <span className="grow">👋 {pendingN === 1 ? '1 Person wartet' : `${pendingN} Personen warten`} auf Freigabe für diesen Kanal.</span>
+          <button onClick={() => setInfo(true)}>Prüfen</button>
+          <button className="bar-close" aria-label="Hinweis schließen" title="Ausblenden" onClick={() => setDismissedN(pendingN)}>✕</button>
+        </div>
+      )}
       <div className="messages">
         {ch.posts.map((p) => <PostView key={p.id} ch={ch} p={p} isMod={isMod} onErr={setErr} />)}
         <div ref={bottom} />

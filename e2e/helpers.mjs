@@ -23,7 +23,7 @@ export function startServer(port) {
     env: {
       ...process.env, CHAT_DOMAIN: `${H}:${port}`, CHAT_LISTEN: `0.0.0.0:${port}`, CHAT_DATA_DIR: dir, CHAT_WEB_DIR: WEB,
       CHAT_ADMIN_KEY: 'e2e-admin-key', CHAT_FEDERATION_INSECURE_HTTP: 'true', CHAT_USER_INVITES: 'true', CHAT_RATE_PER_MINUTE: '100000',
-      CHAT_CSP_CONNECT_EXTRA: `http://${H}:*`,
+      CHAT_CSP_CONNECT_EXTRA: `http://${H}:*`, CHAT_MIN_PASSPHRASE: process.env.CHAT_MIN_PASSPHRASE ?? '4',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -84,9 +84,9 @@ export async function contactLink(page) {
 
 /** `from` startet Chat mit Besitzer des Links, `to` nimmt an. */
 export async function connect(from, to, link, fromAddr) {
-  await from.getByTitle('Neuer Chat').click();
+  await from.getByTitle('Hinzufügen').click();
   await from.getByLabel('Link oder Chat-Code').fill(link);
-  await from.getByRole('button', { name: 'Chat starten' }).click();
+  await from.getByRole('button', { name: 'Weiter' }).click();
   await to.getByText('Anfragen').waitFor({ timeout: 20000 });
   await to.locator('.requests .conv', { hasText: fromAddr }).click();
   await to.getByRole('button', { name: 'Annehmen' }).click();
@@ -102,8 +102,8 @@ export const seen = (page, text) => page.locator('.messages p.text', { hasText: 
 
 /** Chat mit dem Besitzer eines Kontaktlinks starten (Gegenseite nimmt selbst an). */
 export async function connectToLink(from, link) {
-  await from.getByTitle('Neuer Chat').click();
+  await from.getByTitle('Hinzufügen').click();
   await from.getByLabel('Link oder Chat-Code').fill(link);
-  await from.getByRole('button', { name: 'Chat starten' }).click();
+  await from.getByRole('button', { name: 'Weiter' }).click();
   await from.locator('.chat-header').waitFor({ timeout: 30000 });
 }

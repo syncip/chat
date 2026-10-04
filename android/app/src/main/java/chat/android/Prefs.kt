@@ -25,9 +25,9 @@ class Prefs(ctx: Context) {
         get() = p.getBoolean("keep_connected", true)
         set(v) = p.edit().putBoolean("keep_connected", v).apply()
 
-    /** Mindestlänge der Passphrase (Standard 10, einstellbar 1–128). */
+    /** Mindestlänge der Passphrase: vom Admin des Servers festgelegt (zuletzt gemeldeter Wert, Standard 8). */
     var minPassphrase: Int
-        get() = p.getInt("min_pass", 10)
+        get() = p.getInt("min_pass", 8)
         set(v) = p.edit().putInt("min_pass", v.coerceIn(1, 128)).apply()
 
     /** Ton bei neuen Nachrichten, solange die App im Vordergrund ist (im Hintergrund entscheidet der Benachrichtigungskanal). */

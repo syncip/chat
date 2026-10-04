@@ -76,6 +76,7 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
     var dialog by remember { mutableStateOf<String?>(null) } // new | group
     var isAdmin by remember { mutableStateOf(false) }
     LaunchedEffect(online) { if (online) isAdmin = vm.engine.isAdmin() }
+    LaunchedEffect(online, vm.engine.info) { vm.engine.info?.min_passphrase?.takeIf { it > 0 }?.let { vm.prefs.minPassphrase = it } }
     val s = state ?: return
     if (!s.backupDone) BackupGate(vm, s)
 
@@ -98,15 +99,16 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
                 TopAppBar(
                     title = { Column { Text(s.me.name); Text("${if (online) "● verbunden" else "○ offline"} · ${s.me.domain}", style = MaterialTheme.typography.bodySmall) } },
                     actions = {
-                        TextButton(onClick = { dialog = "new" }) { Text("＋") }
-                        TextButton(onClick = { dialog = "group" }) { Text("👥") }
-                        TextButton(onClick = { dialog = "channel" }) { Text("📢") }
-                        TextButton(onClick = { dialog = "join" }) { Text("🔗") }
-                        if (isAdmin) TextButton(onClick = { screen = Screen.Admin }) { Text("🛠") }
-                        TextButton(onClick = { screen = Screen.Files(null) }) { Text("📁") }
                         val sec = securityReport(s, online, vm.engine.info?.client_hash).first
-                        TextButton(onClick = { dialog = "security" }) { Text("🛡", color = levelColor(sec)) }
-                        TextButton(onClick = { screen = Screen.Settings }) { Text("⚙") }
+                        var menu by remember { mutableStateOf(false) }
+                        TextButton(onClick = { dialog = "new" }) { Text("＋") }
+                        TextButton(onClick = { menu = true }) { Text("⋮", color = if (sec == Level.Ok) androidx.compose.ui.graphics.Color.Unspecified else levelColor(sec)) }
+                        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("⚙ Einstellungen") }, onClick = { menu = false; screen = Screen.Settings })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("📁 Alle Dateien") }, onClick = { menu = false; screen = Screen.Files(null) })
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("🛡 Sicherheit") }, onClick = { menu = false; dialog = "security" })
+                            if (isAdmin) androidx.compose.material3.DropdownMenuItem(text = { Text("🛠 Administration") }, onClick = { menu = false; screen = Screen.Admin })
+                        }
                     },
                 )
             },
@@ -161,7 +163,11 @@ fun MainScreen(vm: AppViewModel, activity: FragmentActivity, onSecureChanged: ()
     }
 
     when (dialog) {
-        "new" -> StartChatDialog(vm, onClose = { dialog = null }, onStarted = { id -> dialog = null; screen = Screen.Chat(id) })
+        "new" -> AddDialog(
+            vm, onClose = { dialog = null }, onStarted = { id -> dialog = null; screen = Screen.Chat(id) },
+            onGroup = { dialog = "group" }, onChannel = { dialog = "channel" },
+            onJoinedChannel = { id -> dialog = null; screen = Screen.Channel(id) },
+        )
         "channel" -> CreateChannelDialog(vm, onClose = { dialog = null }, onCreated = { id -> dialog = null; screen = Screen.Channel(id) })
         "join" -> JoinChannelDialog(vm, onClose = { dialog = null }, onJoined = { id -> dialog = null; screen = Screen.Channel(id) })
         "security" -> SecurityDialog(vm, s, online, onClose = { dialog = null })

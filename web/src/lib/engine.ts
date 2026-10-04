@@ -8,6 +8,7 @@ import { AccountSync } from './sync';
 import { clearSession } from './session';
 import { playNotify } from './sound';
 import { loadCore, type Client, type Core, type Vault } from './core';
+import { setMinPassLength } from './prefs';
 import { removePasskey } from './passkey';
 import { kv } from './db';
 import type {
@@ -167,6 +168,10 @@ export class Engine {
     const info = await api0.serverInfo();
     const domain = info.domain;
     if (info.registration === 'closed') throw new Error('Dieser Server nimmt keine Registrierungen an.');
+    if (info.min_passphrase) {
+      setMinPassLength(info.min_passphrase);
+      if (opts.passphrase.length < info.min_passphrase) throw new Error(`Die Passphrase braucht mindestens ${info.min_passphrase} Zeichen (Vorgabe dieses Servers).`);
+    }
     const client = new core.Client(`${name}@${domain}`);
     const ts = Math.floor(Date.now() / 1000);
     // Die Registrierung beweist den Besitz des Konto-Schlüssels (AIK).
@@ -564,13 +569,13 @@ export class Engine {
       this.client!.deleteGroup(gid);
       return;
     }
-    if (others.length === 0) { // nur eigene Geräte: kein Gespräch
+    if (others.length === 0 && !viaInbox) { // nur eigene Geräte, aber nicht von einem eigenen Gerät: kein Gespräch
       this.client!.deleteGroup(gid);
       return;
     }
     const kind = addrs.length === 2 ? 'dm' : 'group';
     const conv: Conversation = {
-      id, kind, title: kind === 'dm' ? others[0] : 'Gruppe', status: viaInbox ? 'active' : 'request', members,
+      id, kind, title: kind === 'dm' ? others[0] : others.length === 0 ? 'Notizen (nur ich)' : 'Gruppe', status: viaInbox ? 'active' : 'request', members,
       caps: {}, messages: [], unread: viaInbox ? 0 : 1, disappearSeconds: 0, createdAt: Date.now(),
     };
     s.conversations[id] = conv;
@@ -1106,6 +1111,31 @@ export class Engine {
     await this.ensureMailbox(conv);
     await this.flush();
     for (const a of addresses) await this.sendWelcomeTo(conv, gid, welcome, a);
+    await this.announce(conv);
+    await this.broadcast(conv, this.newEnvelope({ kind: 'group_name', name: conv.title }));
+    this.dirty();
+    return id;
+  }
+
+  /** Ein Chat nur mit dem eigenen Konto („Notizen an mich“, z. B. als Dateiablage; die eigenen Geräte nehmen daran teil). */
+  isSelfChat(c: Conversation): boolean {
+    const me = this.state!.me.address;
+    return c.kind === 'group' && c.status === 'active' && c.members.length > 0 && c.members.every((m) => m.address === me);
+  }
+
+  async openSelfChat(): Promise<string> {
+    const s = this.state!;
+    const existing = Object.values(s.conversations).find((c) => this.isSelfChat(c));
+    if (existing) return existing.id;
+    const gid = this.client!.createGroup();
+    const id = hex(gid);
+    const conv: Conversation = {
+      id, kind: 'group', title: 'Notizen (nur ich)', status: 'active', members: this.readMembers(gid),
+      caps: {}, messages: [], unread: 0, disappearSeconds: 0, createdAt: Date.now(),
+    };
+    s.conversations[id] = conv;
+    await this.ensureMailbox(conv);
+    await this.flush();
     await this.announce(conv);
     await this.broadcast(conv, this.newEnvelope({ kind: 'group_name', name: conv.title }));
     this.dirty();

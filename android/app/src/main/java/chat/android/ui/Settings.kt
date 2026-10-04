@@ -147,12 +147,7 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
             }
 
             Section("Sicherheit")
-            var minLen by remember { mutableStateOf(prefs.minPassphrase.toString()) }
-            OutlinedTextField(
-                value = minLen, onValueChange = { v -> minLen = v.filter { it.isDigit() }.take(3); minLen.toIntOrNull()?.let { prefs.minPassphrase = it } },
-                label = { Text("Mindestlänge für Passphrasen") }, singleLine = true,
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
-            )
+            Text("Mindestlänge für Passphrasen: ${prefs.minPassphrase} Zeichen (vom Server-Admin festgelegt).", style = MaterialTheme.typography.bodySmall)
             var inApp by remember { mutableStateOf(prefs.inAppSound) }
             SwitchRow("Benachrichtigungston bei neuen Nachrichten (App geöffnet)", inApp) { inApp = it; prefs.inAppSound = it }
             SwitchRow("Screenshots und Bildschirmaufnahme verhindern", secure) { secure = it; prefs.secureScreen = it; onSecureChanged() }

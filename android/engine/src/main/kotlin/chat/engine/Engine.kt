@@ -183,6 +183,7 @@ class Engine(
         }
         val domain = info.domain
         if (info.registration == "closed") throw ChatException("Dieser Server nimmt keine Registrierungen an.")
+        if (info.min_passphrase > 0 && passphrase.length < info.min_passphrase) throw ChatException("Die Passphrase braucht mindestens ${info.min_passphrase} Zeichen (Vorgabe dieses Servers).")
         val c = MlsClient.create("$name@$domain")
         val ts = clock() / 1000
         // Die Registrierung beweist den Besitz des Konto-Schlüssels (AIK).
@@ -477,7 +478,21 @@ class Engine(
         channels.start()
         tick = scope.launch(dispatcher) {
             var n = 0
-            while (true) { delay(30_000); purgeExpired(); retryOutbox(); if (++n % 2 == 0) incoming.trySend { syncNow() } } // Sicherheitsnetz für verpasste Sync-Ereignisse
+            while (true) {
+                delay(30_000); purgeExpired(); retryOutbox()
+                incoming.trySend { catchUp() } // Sicherheitsnetz: verpasste Nachrichten nachholen, falls die Verbindung unbemerkt hängt
+                if (++n % 2 == 0) incoming.trySend { syncNow() } // Sicherheitsnetz für verpasste Sync-Ereignisse
+            }
+        }
+    }
+
+    /** Beim Vordergrund-Wechsel oder bei neuem Netz: sofort neu verbinden (falls getrennt) und Nachrichten nachholen. */
+    fun nudge() {
+        if (closed || state == null || api == null) return
+        incoming.trySend { catchUp() }
+        if (!_online.value) {
+            backoff = 1000
+            scope.launch(dispatcher) { wsJob?.cancel(); ws?.cancel(); ws = null; connect() }
         }
     }
 
@@ -636,10 +651,10 @@ class Engine(
         // Blockierte oder nicht erlaubte Absender: stillschweigend verwerfen (der Absender erfährt nichts).
         val blocked = !viaInbox && (others.any { it in s.blockedUsers || (splitAddress(it)?.second ?: "") in s.blockedServers } ||
             (s.filterMode == "allow" && others.none { !isBlocked(it) }))
-        if (blocked || others.isEmpty()) { client!!.deleteGroup(gid); return }
+        if (blocked || (others.isEmpty() && !viaInbox)) { client!!.deleteGroup(gid); return } // nur eigene Geräte, aber nicht von einem eigenen Gerät: kein Gespräch
         val kind = if (addrs.size == 2) "dm" else "group"
         val conv = Conversation(
-            id = id, kind = kind, title = if (kind == "dm") others[0] else "Gruppe",
+            id = id, kind = kind, title = if (kind == "dm") others[0] else if (others.isEmpty()) "Notizen (nur ich)" else "Gruppe",
             status = if (viaInbox) "active" else "request", members = members, unread = if (viaInbox) 0 else 1, createdAt = clock(),
         )
         s.conversations[id] = conv
@@ -1099,6 +1114,25 @@ class Engine(
         ensureMailbox(conv)
         flush()
         for (a in addresses) sendWelcomeTo(conv, gid, add.welcome, a)
+        announce(conv)
+        broadcast(conv, newEnvelope(Content.GroupName(conv.title)))
+        dirty()
+        id
+    }
+
+    /** Ein Chat nur mit dem eigenen Konto („Notizen an mich“, z. B. als Dateiablage; die eigenen Geräte nehmen daran teil). */
+    fun isSelfChat(s: AppState, c: Conversation): Boolean =
+        c.kind == "group" && c.status == "active" && c.members.isNotEmpty() && c.members.all { it.address == s.me.address }
+
+    suspend fun openSelfChat(): String = op {
+        val s = state!!
+        s.conversations.values.firstOrNull { isSelfChat(s, it) }?.let { return@op it.id }
+        val gid = client!!.createGroup()
+        val id = gid.hex()
+        val conv = Conversation(id = id, kind = "group", title = "Notizen (nur ich)", status = "active", members = readMembers(gid), createdAt = clock())
+        s.conversations[id] = conv
+        ensureMailbox(conv)
+        flush()
         announce(conv)
         broadcast(conv, newEnvelope(Content.GroupName(conv.title)))
         dirty()

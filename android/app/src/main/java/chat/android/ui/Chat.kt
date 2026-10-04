@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -121,7 +123,7 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
                             Text(conv.title, maxLines = 1)
                             val sec = convSecurity(s, conv)
                             Text(
-                                (if (conv.kind == "group") "${conv.members.size} Mitglieder" else "Ende-zu-Ende-verschlüsselt") + " · 🔒 ${sec.second}",
+                                (if (vm.engine.isSelfChat(s, conv)) "Nur du · Notizen & Dateiablage" else if (conv.kind == "group") "${conv.members.size} Mitglieder" else "Ende-zu-Ende-verschlüsselt") + " · 🔒 ${sec.second}",
                                 style = MaterialTheme.typography.bodySmall, color = levelColor(sec.first),
                             )
                         }
@@ -161,19 +163,32 @@ fun ChatScreen(vm: AppViewModel, s: AppState, conv: Conversation, onBack: () -> 
                     if (files.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         files.forEach { u -> FilterChip(selected = true, onClick = { files = files - u }, label = { Text(u.lastPathSegment ?: "Datei") }) }
                     }
-                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(enabled = editing == null, onClick = { pick.launch("*/*") }) { Text("📎") }
-                        TextButton(enabled = editing == null, onClick = { codeMode = !codeMode }) { Text(if (codeMode) "</> ✓" else "</>") }
-                        if (conv.kind == "dm") TextButton(enabled = editing == null, onClick = { once = !once }) { Text(if (once) "🔒 ✓" else "🔒") }
+                    if (codeMode || once) Text(listOfNotNull(if (codeMode) "</> Codeblock" else null, if (once) "🔒 Einmal-Nachricht" else null).joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 12.dp))
+                    // WhatsApp-Stil: Anhängen-Menü, breites abgerundetes Eingabefeld (bis 6 Zeilen), runder Sendeknopf
+                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        var attachMenu by remember { mutableStateOf(false) }
+                        androidx.compose.foundation.layout.Box {
+                            TextButton(enabled = editing == null, onClick = { attachMenu = true }, modifier = Modifier.height(52.dp)) { Text("＋", style = MaterialTheme.typography.titleLarge) }
+                            androidx.compose.material3.DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                                androidx.compose.material3.DropdownMenuItem(text = { Text("📎 Datei / Foto anhängen") }, onClick = { attachMenu = false; pick.launch("*/*") })
+                                androidx.compose.material3.DropdownMenuItem(text = { Text(if (codeMode) "</> Codeblock ausschalten" else "</> Codeblock") }, onClick = { attachMenu = false; codeMode = !codeMode })
+                                if (conv.kind == "dm") androidx.compose.material3.DropdownMenuItem(text = { Text(if (once) "🔒 Einmal-Nachricht ausschalten" else "🔒 Einmal-Nachricht") }, onClick = { attachMenu = false; once = !once })
+                            }
+                        }
                         Column(Modifier.weight(1f)) {
-                            if (codeMode) OutlinedTextField(value = lang, onValueChange = { lang = it }, placeholder = { Text("Sprache") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                            if (codeMode) OutlinedTextField(value = lang, onValueChange = { lang = it }, placeholder = { Text("Sprache") }, singleLine = true, shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth())
                             OutlinedTextField(
-                                value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().heightIn(max = 180.dp),
+                                value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                                minLines = 1, maxLines = 6, shape = androidx.compose.foundation.shape.RoundedCornerShape(26.dp),
                                 placeholder = { Text(if (codeMode) "Code …" else "Nachricht …") },
-                                textStyle = if (codeMode) MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace) else MaterialTheme.typography.bodyMedium,
+                                textStyle = if (codeMode) MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace) else MaterialTheme.typography.bodyLarge,
                             )
                         }
-                        Button(enabled = !busy && (text.isNotBlank() || files.isNotEmpty()), onClick = { send() }) { Text(if (busy) "…" else "Senden") }
+                        Button(
+                            enabled = !busy && (text.isNotBlank() || files.isNotEmpty()), onClick = { send() },
+                            shape = androidx.compose.foundation.shape.CircleShape, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                            modifier = Modifier.size(52.dp),
+                        ) { Text(if (busy) "…" else "➤", style = MaterialTheme.typography.titleMedium) }
                     }
                 }
             } else if (conv.status == "left") {

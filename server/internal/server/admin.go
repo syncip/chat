@@ -39,6 +39,7 @@ type Settings struct {
 	MaxPostSize          int      `json:"max_post_size"`
 	ChannelRetentionDays int      `json:"channel_retention_days"`
 	MaxHooks             int      `json:"max_hooks"`
+	MinPassphrase        int      `json:"min_passphrase"`
 }
 
 func settingsOf(c *config.Config) Settings {
@@ -49,7 +50,7 @@ func settingsOf(c *config.Config) Settings {
 		UserQuota: c.UserQuota, BlobRetentionDays: days(c.BlobRetention), MessageRetentionDays: days(c.MessageRetention),
 		Federation: c.Federation, FedAllow: append([]string{}, c.FedAllow...), FedBlock: append([]string{}, c.FedBlock...),
 		RatePerMinute: c.RatePerMinute, MaxMailboxes: c.MaxMailboxes, MaxDevices: c.MaxDevices, Channels: c.Channels, MaxChannels: c.MaxChannels,
-		MaxChannelMembers: c.MaxChannelUsers, MaxPostSize: c.MaxPostSize, ChannelRetentionDays: days(c.ChannelRetention), MaxHooks: c.MaxHooks,
+		MaxChannelMembers: c.MaxChannelUsers, MaxPostSize: c.MaxPostSize, ChannelRetentionDays: days(c.ChannelRetention), MaxHooks: c.MaxHooks, MinPassphrase: c.MinPassphrase,
 	}
 }
 
@@ -70,12 +71,15 @@ func (st Settings) validate() error {
 		"blob_retention_days": int64(st.BlobRetentionDays), "message_retention_days": int64(st.MessageRetentionDays),
 		"rate_per_minute": int64(st.RatePerMinute), "max_mailboxes": int64(st.MaxMailboxes), "max_devices": int64(st.MaxDevices),
 		"max_channels": int64(st.MaxChannels), "max_channel_members": int64(st.MaxChannelMembers), "max_post_size": int64(st.MaxPostSize),
-		"channel_retention_days": int64(st.ChannelRetentionDays), "max_hooks": int64(st.MaxHooks),
+		"channel_retention_days": int64(st.ChannelRetentionDays), "max_hooks": int64(st.MaxHooks), "min_passphrase": int64(st.MinPassphrase),
 	}
 	for k, v := range pos {
 		if v < 1 {
 			return errors.New(k + " muss mindestens 1 sein")
 		}
+	}
+	if st.MinPassphrase > 128 {
+		return errors.New("min_passphrase: höchstens 128")
 	}
 	if st.RegistrationPoW < 0 || st.RegistrationPoW > 28 {
 		return errors.New("registration_pow: 0–28")
@@ -100,6 +104,7 @@ func (st Settings) applyTo(c config.Config) *config.Config {
 	c.Federation, c.FedAllow, c.FedBlock = st.Federation, norm(st.FedAllow), norm(st.FedBlock)
 	c.RatePerMinute, c.MaxMailboxes, c.MaxDevices, c.Channels = st.RatePerMinute, st.MaxMailboxes, st.MaxDevices, st.Channels
 	c.MaxChannels, c.MaxChannelUsers, c.MaxPostSize, c.ChannelRetention, c.MaxHooks = st.MaxChannels, st.MaxChannelMembers, st.MaxPostSize, hours(st.ChannelRetentionDays), st.MaxHooks
+	c.MinPassphrase = st.MinPassphrase
 	return &c
 }
 

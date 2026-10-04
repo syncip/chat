@@ -6,7 +6,7 @@ import { ChatView } from './ChatView';
 import { Settings } from './Settings';
 import { BackupGate } from './BackupGate';
 import { Dialog } from './Dialog';
-import { StartChat, NewGroup } from './Dialogs';
+import { AddDialog, NewGroup } from './Dialogs';
 import { Avatar } from './Avatar';
 import { FilesDialog } from './Files';
 import { SecurityDialog } from './Security';
@@ -94,10 +94,7 @@ export function Main() {
             <div className="muted small">{e.online ? '● verbunden' : '○ offline'} · {s.me.domain}</div>
           </div>
           <div className="row">
-            <button title="Neuer Chat" onClick={() => setPanel('new')}>＋</button>
-            <button title="Neue Gruppe" onClick={() => setPanel('group')}>👥</button>
-            <button title="Kanal erstellen" onClick={() => setPanel('channel')}>📢</button>
-            <button title="Kanal beitreten" onClick={() => setPanel('join')}>🔗</button>
+            <button title="Hinzufügen" aria-label="Neu" onClick={() => setPanel('new')}>＋</button>
             <button title="Alle Dateien" aria-label="Alle Dateien" onClick={() => setPanel('files')}>📁</button>
             {e.isAdmin && <button title="Server-Administration" aria-label="Administration" onClick={() => setPanel('admin')}>🛠</button>}
             <button title="Sicherheit" aria-label="Sicherheit" className={`sec-chip ${sec.level}`} onClick={() => setPanel('security')}>🛡</button>
@@ -156,7 +153,7 @@ export function Main() {
       {panel === 'files' && <FilesDialog onClose={() => setPanel(null)} />}
       {panel === 'security' && <SecurityDialog onClose={() => setPanel(null)} />}
       {panel === 'settings' && <Settings onClose={() => setPanel(null)} />}
-      {panel === 'new' && <StartChat onClose={() => setPanel(null)} onStarted={(id) => { setPanel(null); setActive(id); }} />}
+      {panel === 'new' && <AddDialog onClose={() => setPanel(null)} onStarted={(id) => { setPanel(null); setActiveChan(null); setActive(id); }} onGroup={() => setPanel('group')} onChannel={() => setPanel('channel')} onJoinLink={(h) => { setPanel(null); setJoinLink(h); }} />}
       {panel === 'group' && <NewGroup onClose={() => setPanel(null)} onCreated={(id) => { setPanel(null); setActive(id); }} />}
       {panel === 'channel' && <CreateChannel onClose={() => setPanel(null)} onCreated={(id) => { setPanel(null); setActive(null); setActiveChan(id); }} />}
       {(panel === 'join' || joinLink) && (

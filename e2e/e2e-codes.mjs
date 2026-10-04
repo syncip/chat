@@ -26,12 +26,12 @@ try {
   console.log('✔ Geräte-QR-Code erzeugt');
   await alice.keyboard.press('Escape');
 
-  await bob.getByTitle('Neuer Chat').click();
+  await bob.getByTitle('Hinzufügen').click();
   await bob.getByLabel('Link oder Chat-Code').fill('gibtsnicht');
-  await bob.getByRole('button', { name: 'Chat starten' }).click();
+  await bob.getByRole('button', { name: 'Weiter' }).click();
   await bob.getByText('Diesen Code gibt es nicht.').waitFor();
   await bob.getByLabel('Link oder Chat-Code').fill('martinistcool');
-  await bob.getByRole('button', { name: 'Chat starten' }).click();
+  await bob.getByRole('button', { name: 'Weiter' }).click();
   await bob.locator('.chat-header').waitFor({ timeout: 30000 });
   await alice.getByText('Anfragen').waitFor({ timeout: 20000 });
   console.log('✔ Chat per Chat-Code gestartet');

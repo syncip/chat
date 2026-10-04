@@ -2,13 +2,13 @@
 const get = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
 const set = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* nicht verfügbar */ } };
 
-/** Mindestlänge der Passphrase (Standard 10, einstellbar 1–128). Die Passphrase wird mit Argon2id gehärtet; kurze Passphrasen sind dennoch leichter zu erraten. */
+/** Mindestlänge der Passphrase: vom Admin des Servers festgelegt (zuletzt gemeldeter Wert, Standard 8). Die Passphrase wird mit Argon2id gehärtet. */
 export function minPassLength(): number {
   const n = Number(get('chat.minPass'));
-  return Number.isInteger(n) && n >= 1 && n <= 128 ? n : 10;
+  return Number.isInteger(n) && n >= 1 && n <= 128 ? n : 8;
 }
 export function setMinPassLength(n: number): void {
-  set('chat.minPass', String(Math.min(128, Math.max(1, Math.round(n) || 10))));
+  set('chat.minPass', String(Math.min(128, Math.max(1, Math.round(n) || 8))));
 }
 
 export type RememberMode = 'off' | 'tab' | '1h' | '8h' | '7d';

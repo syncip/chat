@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { H, chromium, CHROME as EXE, sleep, startServer, waitUp, register } from './helpers.mjs';
+import { H, chromium, CHROME as EXE, sleep, startServer, waitUp, register , openSettings } from './helpers.mjs';
 
 const servers = [startServer(18080), startServer(18081)];
 let browser;
@@ -23,7 +23,7 @@ try {
   console.log('✔ Registrierung auf zwei Servern');
 
   // Alice teilt ihren Kontaktlink
-  await alice.getByTitle('Einstellungen').click();
+  await openSettings(alice, 'Profil');
   const link = await alice.locator('input[readonly]').first().inputValue();
   assert.match(link, /#\/add\//);
   await alice.keyboard.press('Escape');
@@ -83,7 +83,7 @@ try {
   console.log('✔ Datei (150 kB, .exe) Ende-zu-Ende verschlüsselt übertragen');
 
   // Blockieren: Alice blockiert Bob → neue Nachricht kommt nicht mehr an
-  await alice.getByTitle('Einstellungen').click();
+  await openSettings(alice, 'Privatsphäre');
   await alice.getByPlaceholder('name@server', { exact: true }).fill(`bob@${H}:18081`);
   await alice.getByRole('button', { name: 'Hinzufügen' }).first().click();
   await alice.getByText(`bob@${H}:18081`).first().waitFor();
@@ -95,7 +95,6 @@ try {
   console.log('✔ Blockieren verwirft Nachrichten stillschweigend');
 
   // Persistenz: Alice sperren und entsperren (Verlauf bleibt)
-  await alice.getByTitle('Einstellungen').click();
   await alice.getByRole('button', { name: 'Sperren', exact: true }).click();
   await alice.getByLabel('Passphrase', { exact: true }).fill(pass);
   await alice.getByRole('button', { name: 'Entsperren' }).click();

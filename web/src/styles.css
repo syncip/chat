@@ -170,3 +170,84 @@ code { background: color-mix(in srgb, var(--text) 8%, transparent); padding: 0 4
 .avatar-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
 img.avatar { display: inline-block; }
 img.avatar.square { border-radius: 28%; }
+
+/* ===== Einheitlicher Stil (an die Android-App angelehnt: Material 3, gleiche Farben und Symbole) ===== */
+.icon { display: block; flex: none; }
+button { border-radius: 20px; padding: 7px 16px; }
+button.link { border-radius: 4px; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0 !important; border: none !important; background: transparent !important; border-radius: 50% !important; color: var(--muted); }
+.icon-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 9%, transparent) !important; color: var(--text); }
+.icon-btn.sec-chip.ok { color: var(--ok); } .icon-btn.sec-chip.warn { color: var(--warn); } .icon-btn.sec-chip.bad { color: var(--danger); }
+.dialog > header .icon-btn { margin-right: -8px; }
+input, textarea, select { border-radius: 12px; padding: 10px 12px; }
+input:focus, textarea:focus, select:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 1px var(--accent); }
+.card { border-radius: 24px; }
+.dialog { padding: 20px 24px; }
+
+/* Seitenleiste wie die Startseite der App */
+.sidebar { position: relative; }
+.sidebar > header.appbar { display: flex; align-items: center; gap: 10px; padding: 10px 8px 10px 14px; background: var(--panel); }
+.appbar-title { flex: 1; min-width: 0; } .appbar-title strong, .appbar-title .small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar > header.appbar .row.icons { gap: 0; flex-wrap: nowrap; }
+.sidebar > header.appbar .icon-btn { width: 38px; height: 38px; font-size: inherit; }
+.searchbar { display: flex; align-items: center; gap: 8px; margin: 0 12px 6px; padding: 0 12px; border-radius: 22px; background: var(--panel-2); color: var(--muted); }
+.searchbar input { border: none; background: transparent; padding: 9px 0; box-shadow: none !important; }
+.chips { display: flex; gap: 8px; padding: 4px 12px 10px; border-bottom: 1px solid var(--line); }
+.chip-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 14px; border-radius: 16px; background: var(--panel-2); border: none; color: var(--muted); font-size: 14px; }
+.chip-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, var(--panel-2)); }
+.chip-btn.on { background: color-mix(in srgb, var(--accent) 18%, var(--panel)); color: var(--accent); font-weight: 600; }
+.conv { border-bottom: none; padding: 10px 14px; }
+.conv .title { display: flex; align-items: center; gap: 4px; }
+.conv .title .icon { color: var(--muted); }
+.convs { flex: 1; padding-bottom: 88px; }
+.empty { line-height: 1.5; }
+.fab { position: absolute; right: 18px; bottom: 18px; width: 56px; height: 56px; border-radius: 16px; padding: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--accent-text); border: none; box-shadow: 0 3px 8px rgba(11, 20, 26, .25); }
+.fab:hover:not(:disabled) { background: var(--accent-2); }
+
+/* Einstellungen in Kategorien (wie in der App) */
+.dialog.wide:has(.settings) { max-width: 920px; height: min(90vh, 760px); display: flex; flex-direction: column; }
+.settings { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 20px; flex: 1; min-height: 0; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; overflow: auto; border-right: 1px solid var(--line); padding-right: 12px; }
+.settings-me { display: flex; gap: 12px; align-items: center; padding: 6px 8px 14px; }
+.settings-me .small { overflow: hidden; text-overflow: ellipsis; }
+.nav-item { display: flex; align-items: center; gap: 14px; text-align: left; border: none; background: transparent; border-radius: 14px; padding: 10px 10px; color: var(--text); }
+.nav-item > .icon:first-child { color: var(--accent); }
+.nav-item > .icon:last-child { color: var(--muted); opacity: .6; }
+.nav-item .nav-title { display: block; font-weight: 600; } .nav-item .small { display: block; }
+.nav-item:hover:not(:disabled) { background: var(--panel-2); }
+.nav-item.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.settings-nav .version { margin-top: auto; padding: 12px 8px 0; }
+.settings-page { overflow: auto; min-width: 0; padding-right: 4px; }
+.settings-page .page-title { font-size: 20px; margin: 2px 0 6px; }
+.settings-page section:first-of-type { border: none; margin: 0; }
+.back-to-list { display: none !important; align-items: center; gap: 6px; padding: 4px 0 !important; margin-bottom: 6px; }
+.status-msg { position: sticky; bottom: 0; background: var(--panel); padding: 8px 0; border-top: 1px solid var(--line); }
+
+@media (max-width: 720px) {
+  .dialog.wide:has(.settings) { height: 92vh; }
+  .settings { grid-template-columns: 1fr; }
+  .settings-nav { border-right: none; padding-right: 0; }
+  .settings.has-page .settings-nav { display: none; }
+  .settings:not(.has-page) .settings-page { display: none; }
+  .back-to-list { display: inline-flex !important; }
+  .nav-item.on { background: transparent; }
+}
+.nav-item.on { color: var(--text); border-color: transparent; }
+.sidebar { min-width: 0; overflow: hidden; }
+.layout > main { min-width: 0; }
+@media (max-width: 720px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .sidebar > header.appbar { padding: 8px 4px 8px 10px; gap: 8px; }
+  .sidebar > header.appbar .icon-btn { width: 34px; height: 34px; }
+  .appbar-title .small { font-size: 11.5px; }
+}
+.action-list { display: flex; flex-direction: column; gap: 2px; margin: 0 -10px; }
+.action-list .nav-item > .icon:first-child { color: var(--accent); }
+.chat-header { background: var(--panel); }
+.chat-header > button.icon-btn { padding: 0; }
+.composer .row.end > button:not(.primary) { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; color: var(--muted); }
+.composer .row.end > button.on:not(.primary) { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+@media (max-width: 720px) { .back.icon-btn { display: inline-flex; } }
+.back.icon-btn { display: none; }
+@media (max-width: 720px) { .back.icon-btn { display: inline-flex; } }

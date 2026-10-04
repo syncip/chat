@@ -1,3 +1,4 @@
+import { Icon } from './Icon';
 import { useEffect, useRef, useState } from 'react';
 import type { ChannelMember, ChannelPolicy, ChannelState, ChPost } from '../lib/types';
 import { NeedsCaptcha, type ChannelInfo } from '../lib/channels';
@@ -205,12 +206,12 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
   return (
     <div className="chat">
       <header className="chat-header">
-        <button className="back" onClick={onBack} aria-label="Zurück">←</button>
+        <button className="back icon-btn" onClick={onBack} aria-label="Zurück" title="Zurück"><Icon name="back" /></button>
         <Avatar name={ch.title} size={40} channel src={ch.avatar} />
         <div className="grow"><strong>📢 {ch.title}</strong>
           <div className="muted small">{ROLE[ch.me.role]} · {ch.server}</div>
         </div>
-        <button onClick={() => setInfo(true)} aria-label="Details">ⓘ</button>
+        <button className="icon-btn" onClick={() => setInfo(true)} aria-label="Details" title="Details"><Icon name="info" /></button>
       </header>
       {ch.policy.public && <div className="banner bad" role="note">🌐 Öffentlicher Kanal: Inhalte sind unverschlüsselt und für jeden ohne Konto lesbar.</div>}
       {pendingN > dismissedN && (
@@ -242,7 +243,7 @@ export function ChannelView({ ch, onBack, onGone }: { ch: ChannelState; onBack: 
           )}
           {err && <div className="error small" role="alert">{err}</div>}
           <div className="row end">
-            <button title="Bild, Video, Audio oder Datei anhängen" aria-label="Datei anhängen" onClick={() => fileInput.current?.click()}>📎</button>
+            <button title="Bild, Video, Audio oder Datei anhängen" aria-label="Datei anhängen" onClick={() => fileInput.current?.click()}><Icon name="attach" /></button>
             <input ref={fileInput} type="file" multiple hidden onChange={(x) => { setFiles([...files, ...Array.from(x.target.files ?? [])]); x.target.value = ''; }} />
             <button title="Codeblock" className={code ? 'on' : ''} onClick={() => setCode(!code)}>{'</>'}</button>
             {code && <input className="lang" placeholder="Sprache" value={lang} onChange={(x) => setLang(x.target.value)} />}

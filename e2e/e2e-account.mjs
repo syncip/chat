@@ -1,6 +1,6 @@
 // Admin, öffentliche Kanäle ohne Konto, ntfy-kompatible Webhooks, Konto-Sync zwischen Geräten, Angemeldet bleiben / Inaktivitäts-Sperre, Mindestlänge.
 import assert from 'node:assert/strict';
-import { chromium, CHROME, startServer, waitUp, register, linkDevice, sleep, H, PASS } from './helpers.mjs';
+import { chromium, CHROME, startServer, waitUp, register, linkDevice, sleep, H, PASS , openSettings } from './helpers.mjs';
 
 const P = 18104;
 const server = startServer(P);
@@ -127,12 +127,12 @@ try {
   await alice.locator('.conv', { hasText: 'Neu' }).waitFor({ timeout: 30000 });
   console.log('✔ Sync: auf Gerät 2 erstellter Kanal erscheint auf Gerät 1');
   // Einstellung
-  await alice.getByTitle('Einstellungen').click();
+  await openSettings(alice, 'Privatsphäre');
   await alice.getByLabel(/„Gelesen“ senden/).check();
   await alice.keyboard.press('Escape');
   await alice2.waitForFunction(() => true);
   await sleep(4000);
-  await alice2.getByTitle('Einstellungen').click();
+  await openSettings(alice2, 'Privatsphäre');
   await alice2.getByLabel(/„Gelesen“ senden/).waitFor();
   assert.ok(await alice2.getByLabel(/„Gelesen“ senden/).isChecked(), 'Einstellung wurde synchronisiert');
   await alice2.keyboard.press('Escape');
@@ -146,7 +146,7 @@ try {
   console.log('✔ Sync: Löschung');
 
   // --- Angemeldet bleiben + Inaktivitäts-Sperre ---
-  await alice.getByTitle('Einstellungen').click();
+  await openSettings(alice, 'Sicherheit');
   await alice.getByRole('button', { name: 'Jetzt sperren' }).click();
   await alice.getByLabel('Passphrase', { exact: true }).waitFor();
   await alice.getByLabel(/Angemeldet bleiben/).selectOption('tab');

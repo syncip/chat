@@ -14,6 +14,9 @@ import { securityReport } from '../lib/security';
 import { AdminDialog } from './Admin';
 import { idleLockMinutes } from '../lib/prefs';
 import { ChannelView, CreateChannel, JoinChannel } from './Channels';
+import { Icon } from './Icon';
+import type { ChannelState } from '../lib/types';
+import { clearSession } from '../lib/session';
 
 type Panel = null | 'admin' | 'settings' | 'new' | 'group' | 'channel' | 'join' | 'files' | 'security';
 
@@ -40,6 +43,9 @@ export function Main() {
   const [pending, setPending] = useState<string | null>(null);
   const [activeChan, setActiveChan] = useState<string | null>(null);
   const [joinLink, setJoinLink] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<'all' | 'chats' | 'channels'>('all');
 
   // Kontaktlink im URL-Fragment (#/add/…) öffnen.
   useEffect(() => {
@@ -69,6 +75,11 @@ export function Main() {
   const unreadTotal = Object.values(s.conversations).reduce((n, c) => n + c.unread, 0) + Object.values(s.channels ?? {}).reduce((n, c) => n + c.unread, 0);
   useEffect(() => { document.title = unreadTotal > 0 ? `(${unreadTotal}) Chat` : 'Chat'; }, [unreadTotal]);
   const currentChan = activeChan ? s.channels?.[activeChan] : undefined;
+  const q = query.trim().toLowerCase();
+  const shownConvs = q ? list.filter((c) => c.title.toLowerCase().includes(q)) : list;
+  const shownChans = q ? chans.filter((c) => c.title.toLowerCase().includes(q)) : chans;
+  const unreadChats = Object.values(s.conversations).reduce((n, c) => n + c.unread, 0);
+  const unreadChans = Object.values(s.channels ?? {}).reduce((n, c) => n + c.unread, 0);
 
   return (
     <div className="app">
@@ -88,46 +99,66 @@ export function Main() {
       )}
     <div className={`layout ${current || currentChan ? 'chat-open' : ''}`}>
       <aside className="sidebar">
-        <header>
-          <div>
+        <header className="appbar">
+          <Avatar name={s.me.address} src={s.me.avatar} size={40} />
+          <div className="appbar-title">
             <strong>{s.me.name}</strong>
-            <div className="muted small">{e.online ? '● verbunden' : '○ offline'} · {s.me.domain}</div>
+            <div className="muted small" title={s.me.address}>{e.online ? '● verbunden' : '○ offline'}</div>
           </div>
-          <div className="row">
-            <button title="Hinzufügen" aria-label="Neu" onClick={() => setPanel('new')}>＋</button>
-            <button title="Alle Dateien" aria-label="Alle Dateien" onClick={() => setPanel('files')}>📁</button>
-            {e.isAdmin && <button title="Server-Administration" aria-label="Administration" onClick={() => setPanel('admin')}>🛠</button>}
-            <button title="Sicherheit" aria-label="Sicherheit" className={`sec-chip ${sec.level}`} onClick={() => setPanel('security')}>🛡</button>
-            <button title="Einstellungen" onClick={() => setPanel('settings')}>⚙</button>
+          <div className="row icons">
+            <button className="icon-btn" title="Suchen" aria-label="Suchen" onClick={() => { setSearching(!searching); setQuery(''); }}><Icon name="search" /></button>
+            <button className="icon-btn" title="Alle Dateien" aria-label="Alle Dateien" onClick={() => setPanel('files')}><Icon name="folder" /></button>
+            {e.isAdmin && <button className="icon-btn" title="Server-Administration" aria-label="Administration" onClick={() => setPanel('admin')}><Icon name="admin" /></button>}
+            <button title="Sicherheit" aria-label="Sicherheit" className={`icon-btn sec-chip ${sec.level}`} onClick={() => setPanel('security')}><Icon name="shield" /></button>
+            <button className="icon-btn" title="Sperren" aria-label="Sperren" onClick={() => { void clearSession(); void e.lock(); }}><Icon name="lock" /></button>
+            <button className="icon-btn" title="Einstellungen" aria-label="Einstellungen" onClick={() => setPanel('settings')}><Icon name="settings" /></button>
           </div>
         </header>
-        {requests.length > 0 && (
+        {searching && (
+          <div className="searchbar">
+            <Icon name="search" size={18} />
+            <input autoFocus aria-label="Chats durchsuchen" placeholder="Suchen …" value={query} onChange={(x) => setQuery(x.target.value)} />
+          </div>
+        )}
+        <div className="chips" role="tablist" aria-label="Filter">
+          {([['all', 'Alle', unreadChats + unreadChans], ['chats', 'Chats', unreadChats], ['channels', 'Kanäle', unreadChans]] as const).map(([k, label, n]) => (
+            <button key={k} role="tab" aria-selected={filter === k} className={`chip-btn ${filter === k ? 'on' : ''}`} onClick={() => setFilter(k)}>
+              {label}{n > 0 && <span className="badge">{n}</span>}
+            </button>
+          ))}
+        </div>
+        {requests.length > 0 && filter !== 'channels' && (
           <div className="requests">
             <div className="muted small">Anfragen</div>
             {requests.map((c) => (
               <button key={c.id} className="conv" onClick={() => setActive(c.id)}>
-                <span className="title">{c.title}</span><span className="badge">neu</span>
+                <Avatar name={c.title} src={e.avatarOfConv(c)} />
+                <span className="conv-main"><span className="title">{c.title}</span><span className="preview muted small">möchte mit dir chatten</span></span>
+                <span className="conv-side"><span className="badge">neu</span></span>
               </button>
             ))}
           </div>
         )}
         <div className="convs">
-          {chans.map((c) => (
+          {filter !== 'chats' && shownChans.map((c) => (
             <button key={c.id} className={`conv ${c.id === activeChan ? 'active' : ''}`} onClick={() => { setActive(null); setActiveChan(c.id); e.channels.markRead(c.id); }}>
               <Avatar name={c.title} channel src={c.avatar} />
               <span className="conv-main">
-                <span className="title">📢 {c.title}</span>
-                <span className="preview muted small">{c.me.status === 'pending' ? 'Wartet auf Freigabe' : c.me.status === 'banned' ? 'Gesperrt' : 'Öffentlicher Kanal'}</span>
+                <span className="title"><Icon name="channel" size={15} /> {c.title}</span>
+                <span className="preview muted small">{c.me.status === 'pending' ? 'Wartet auf Freigabe' : c.me.status === 'banned' ? 'Gesperrt' : chanPreview(c)}</span>
               </span>
-              <span className="conv-side">{c.unread > 0 && <span className="badge">{c.unread}</span>}</span>
+              <span className="conv-side">
+                <span className="time muted small">{c.posts.at(-1) ? timeShort(c.posts.at(-1)!.ts) : ''}</span>
+                {c.unread > 0 && <span className="badge">{c.unread}</span>}
+              </span>
             </button>
           ))}
-          {list.length === 0 && chans.length === 0 && <p className="muted pad">Noch keine Chats. Teile deinen Kontaktlink (⚙) oder öffne den Link eines Kontakts (＋).</p>}
-          {list.map((c) => (
+          {list.length === 0 && chans.length === 0 && <p className="muted pad empty">Noch keine Chats. Tippe auf <strong>＋</strong> und füge den Link oder Chat-Code eines Kontakts ein – oder lege eine Gruppe, einen Kanal oder „Notizen an mich“ an.</p>}
+          {filter !== 'channels' && shownConvs.map((c) => (
             <button key={c.id} className={`conv ${c.id === active ? 'active' : ''}`} onClick={() => { setActiveChan(null); setActive(c.id); e.markRead(c.id); }}>
               <Avatar name={c.title} src={e.avatarOfConv(c)} />
               <span className="conv-main">
-                <span className="title">{c.kind === 'group' ? '👥 ' : ''}{c.title}</span>
+                <span className="title">{c.kind === 'group' && <><Icon name="group" size={15} /> </>}{c.title}</span>
                 <span className="preview muted small">{preview(c)}</span>
               </span>
               <span className="conv-side">
@@ -137,6 +168,7 @@ export function Main() {
             </button>
           ))}
         </div>
+        <button className="fab" title="Hinzufügen" aria-label="Neu" onClick={() => setPanel('new')}><Icon name="add" size={26} /></button>
       </aside>
       <main>
         {currentChan ? (
@@ -175,6 +207,13 @@ function timeShort(ts: number): string {
   const d = new Date(ts);
   const today = new Date();
   return d.toDateString() === today.toDateString() ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+}
+
+function chanPreview(c: ChannelState): string {
+  const p = c.posts.at(-1);
+  if (!p) return c.key ? 'Privater Kanal' : 'Öffentlicher Kanal';
+  if (p.deleted) return 'Beitrag gelöscht';
+  return preview({ status: '', messages: [p] });
 }
 
 function preview(c: { messages: { parts: { type: string; body?: string; name?: string }[]; deleted?: boolean; once?: boolean }[]; status: string }): string {

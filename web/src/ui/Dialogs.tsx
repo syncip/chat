@@ -1,3 +1,4 @@
+import { Icon } from './Icon';
 import { useState } from 'react';
 import { decodeCard } from '../lib/engine';
 import { useEngine } from './hooks';
@@ -35,10 +36,16 @@ export function AddDialog({ onClose, onStarted, onGroup, onChannel, onJoinLink }
       {err && <p className="error">{err}</p>}
       <button className="primary" disabled={busy || !link.trim()} onClick={() => void go()}>Weiter</button>
       <h3>Oder neu erstellen</h3>
-      <div className="row wrap">
-        <button type="button" disabled={busy} onClick={onGroup}>👥 Gruppe erstellen</button>
-        <button type="button" disabled={busy} onClick={onChannel}>📢 Kanal erstellen</button>
-        <button type="button" disabled={busy} onClick={async () => { setBusy(true); try { onStarted(await e.openSelfChat()); } catch (x) { setErr((x as Error).message); } finally { setBusy(false); } }}>📝 Notizen an mich (Dateiablage)</button>
+      <div className="action-list">
+        <button type="button" className="nav-item" disabled={busy} onClick={onGroup}>
+          <Icon name="group" /><span className="grow"><span className="nav-title">Gruppe erstellen</span><span className="muted small">Mehrere Kontakte, Ende-zu-Ende-verschlüsselt</span></span>
+        </button>
+        <button type="button" className="nav-item" disabled={busy} onClick={onChannel}>
+          <Icon name="channel" /><span className="grow"><span className="nav-title">Kanal erstellen</span><span className="muted small">Beiträge an viele, privat oder öffentlich</span></span>
+        </button>
+        <button type="button" className="nav-item" disabled={busy} onClick={async () => { setBusy(true); try { onStarted(await e.openSelfChat()); } catch (x) { setErr((x as Error).message); } finally { setBusy(false); } }}>
+          <Icon name="folder" /><span className="grow"><span className="nav-title">Notizen an mich</span><span className="muted small">Dateiablage, auf allen deinen Geräten</span></span>
+        </button>
       </div>
     </Dialog>
   );

@@ -9,12 +9,15 @@ import { minPassLength, rememberMode, setRememberMode, REMEMBER_LABEL, idleLockM
 import { soundEnabled, setSoundEnabled, playNotify } from '../lib/sound';
 import { clearSession, persistentAvailable } from '../lib/session';
 import { Dialog } from './Dialog';
+import { Avatar } from './Avatar';
+import { Icon, type IconName } from './Icon';
 
 export function Settings({ onClose }: { onClose: () => void }) {
   const e = useEngine();
   const s = e.state!;
   const [quota, setQuota] = useState<{ used: number; quota: number } | null>(null);
   const [msg, setMsg] = useState('');
+  const [page, setPage] = useState<Cat | null>(null);
   const [invite, setInvite] = useState('');
   const [newBlockUser, setNewBlockUser] = useState('');
   const [newBlockServer, setNewBlockServer] = useState('');
@@ -46,28 +49,33 @@ export function Settings({ onClose }: { onClose: () => void }) {
     setMsg('Backup gespeichert. Bewahre Datei und Passphrase getrennt auf.');
   }
 
+  const cur: Cat = page ?? 'profile';
   return (
     <Dialog title="Einstellungen" onClose={onClose} wide>
+      <div className={`settings ${page ? 'has-page' : ''}`}>
+        <nav className="settings-nav" aria-label="Kategorien">
+          <div className="settings-me">
+            <Avatar name={s.me.address} src={s.me.avatar} size={48} />
+            <div className="grow"><strong>{s.me.name}</strong><div className="muted small">{s.me.address}</div></div>
+          </div>
+          {CATS.map((c) => (
+            <button key={c.id} className={`nav-item ${cur === c.id ? 'on' : ''}`} aria-current={cur === c.id ? 'page' : undefined} onClick={() => { setPage(c.id); setMsg(''); }}>
+              <Icon name={c.icon} />
+              <span className="grow"><span className="nav-title">{c.title}</span><span className="muted small">{c.sub}</span></span>
+              <Icon name="chevron" size={18} />
+            </button>
+          ))}
+          <p className="muted small version">Chat Web {__APP_VERSION__}{e.info?.app_version ? ` · Server ${e.info.app_version}` : ''}</p>
+        </nav>
+        <div className="settings-page">
+          <button className="link back-to-list" onClick={() => setPage(null)}><Icon name="back" size={18} /> Alle Einstellungen</button>
+          <h2 className="page-title">{CATS.find((c) => c.id === cur)!.title}</h2>
+          {cur === 'profile' && (
+            <>
       <section>
         <h3>Profilbild</h3>
         <p className="muted small">Dein Bild sehen deine Chat-Partner (Ende-zu-Ende-verschlüsselt mitgeteilt) und deine anderen Geräte. Es wird klein gerechnet (128 px).</p>
         <AvatarPicker name={s.me.address} src={s.me.avatar} label="Profilbild wählen" onError={(m) => setMsg(m)} onPick={(d) => run(() => e.setMyAvatar(d), d ? 'Profilbild gesetzt.' : 'Profilbild entfernt.')} />
-        <h3>Anmeldung &amp; Sperre (nur hier)</h3>
-        <label>Angemeldet bleiben nach Neuladen
-          <select value={remember} onChange={(x) => { const m = x.target.value as RememberMode; setRemember(m); setRememberMode(m); if (m === 'off') void clearSession(); else setMsg('Gilt ab der nächsten Anmeldung.'); }}>
-            {(Object.keys(REMEMBER_LABEL) as RememberMode[]).filter((m) => persistentAvailable() || m === 'off' || m === 'tab').map((m) => <option key={m} value={m}>{REMEMBER_LABEL[m]}</option>)}
-          </select>
-          <span className="muted small">Dafür wird die Passphrase zeitlich begrenzt auf diesem Gerät vorgehalten (verschlüsselt mit einem nicht exportierbaren Browser-Schlüssel). Nur auf eigenen Geräten nutzen.{!persistentAvailable() ? ' Ohne TLS (https) ist nur „Tab“ möglich.' : ''}</span>
-        </label>
-        <PasskeySection setMsg={setMsg} />
-        <label>Automatisch sperren nach Inaktivität (Minuten, 0 = nie)
-          <input type="number" min={0} value={idle} onChange={(x) => { const n = Math.max(0, Number(x.target.value) || 0); setIdle(n); setIdleLockMinutes(n); }} />
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={sound} onChange={(x) => { setSound(x.target.checked); setSoundEnabled(x.target.checked); if (x.target.checked) playNotify(); }} /> Benachrichtigungston bei neuen Nachrichten
-        </label>
-        <p className="muted small">Mindestlänge für Passphrasen (Backup, neue Konten): {minPassLength()} Zeichen, vom Server-Admin festgelegt.</p>
-        <button onClick={() => { void clearSession(); void e.lock(); }}>Jetzt sperren</button>
       </section>
       <section>
         <h3>Dein Kontaktlink</h3>
@@ -90,6 +98,38 @@ export function Settings({ onClose }: { onClose: () => void }) {
         )}
       </section>
 
+            </>
+          )}
+          {cur === 'security' && (
+            <>
+      <section>
+        <h3>Anmeldung &amp; Sperre (nur hier)</h3>
+        <label>Angemeldet bleiben nach Neuladen
+          <select value={remember} onChange={(x) => { const m = x.target.value as RememberMode; setRemember(m); setRememberMode(m); if (m === 'off') void clearSession(); else setMsg('Gilt ab der nächsten Anmeldung.'); }}>
+            {(Object.keys(REMEMBER_LABEL) as RememberMode[]).filter((m) => persistentAvailable() || m === 'off' || m === 'tab').map((m) => <option key={m} value={m}>{REMEMBER_LABEL[m]}</option>)}
+          </select>
+          <span className="muted small">Dafür wird die Passphrase zeitlich begrenzt auf diesem Gerät vorgehalten (verschlüsselt mit einem nicht exportierbaren Browser-Schlüssel). Nur auf eigenen Geräten nutzen.{!persistentAvailable() ? ' Ohne TLS (https) ist nur „Tab“ möglich.' : ''}</span>
+        </label>
+        <PasskeySection setMsg={setMsg} />
+        <label>Automatisch sperren nach Inaktivität (Minuten, 0 = nie)
+          <input type="number" min={0} value={idle} onChange={(x) => { const n = Math.max(0, Number(x.target.value) || 0); setIdle(n); setIdleLockMinutes(n); }} />
+        </label>
+        <p className="muted small">Mindestlänge für Passphrasen (Backup, neue Konten): {minPassLength()} Zeichen, vom Server-Admin festgelegt.</p>
+        <button onClick={() => { void clearSession(); void e.lock(); }}>Jetzt sperren</button>
+      </section>
+      <section>
+        <h3>Backup &amp; Sitzung</h3>
+        <p className="muted small">Die Backup-Datei enthält deinen Konto-Schlüssel und den aktuellen Stand deiner Einstellungen und Kontakte (keinen Nachrichtenverlauf). Speichere sie erneut, wenn sich Kontakte oder Einstellungen geändert haben.</p>
+        <label>Backup-Passphrase<input type="password" value={backupPass} onChange={(x) => setBackupPass(x.target.value)} autoComplete="new-password" /></label>
+        <div className="row">
+          <button onClick={download}>Verschlüsseltes Backup laden</button>
+          <button className="danger" onClick={() => { if (confirm('Konto lokal löschen? Ohne Backup ist es unwiederbringlich verloren.')) void e.deleteAccount(); }}>Konto lokal löschen</button>
+        </div>
+      </section>
+            </>
+          )}
+          {cur === 'privacy' && (
+            <>
       <section>
         <h3>Blockieren &amp; Allowlist</h3>
         <label>Modus
@@ -128,6 +168,36 @@ export function Settings({ onClose }: { onClose: () => void }) {
           Direkt an Empfänger-Server senden (statt über deinen Home-Server; dann sieht der Ziel-Server deine IP – ein VPN/Tor wird empfohlen)</label>
       </section>
 
+            </>
+          )}
+          {cur === 'notify' && (
+            <section>
+        <label className="check">
+          <input type="checkbox" checked={sound} onChange={(x) => { setSound(x.target.checked); setSoundEnabled(x.target.checked); if (x.target.checked) playNotify(); }} /> Benachrichtigungston bei neuen Nachrichten
+        </label>
+              <p className="muted small">Ob der Browser Benachrichtigungen zeigen darf, legst du in den Website-Einstellungen des Browsers fest.</p>
+            </section>
+          )}
+          {cur === 'devices' && (
+            <>
+      <section>
+        <h3>Geräte</h3>
+        <p className="muted small">Dein Konto kann auf mehreren Geräten gleichzeitig aktiv sein. Ein neues Gerät meldest du mit der Backup-Datei an; ein aktives Gerät nimmt es dann in deine Chats auf.</p>
+        <ul>
+          {devices.map((d) => (
+            <li key={d.id}>
+              <code>{d.id.slice(0, 8)}</code> · seit {new Date(d.created_at * 1000).toLocaleDateString()} {d.current && <strong>(dieses Gerät)</strong>}{' '}
+              {!d.current && <button className="link" onClick={() => { if (confirm('Gerät widerrufen? Es verliert Anmeldung und wird aus deinen Chats entfernt.')) void run(async () => { await e.revokeDevice(d.id); await loadDevices(); }, 'Gerät widerrufen.'); }}>widerrufen</button>}
+            </li>
+          ))}
+        </ul>
+        <DeviceLinkSection />
+      </section>
+
+            </>
+          )}
+          {cur === 'server' && (
+            <>
       <section>
         <h3>Server &amp; Speicher</h3>
         <p className="small">Home-Server: <strong>{s.me.domain}</strong> · Föderation: {e.info?.federation ?? '?'} · Registrierung: {e.info?.registration ?? '?'}</p>
@@ -145,36 +215,24 @@ export function Settings({ onClose }: { onClose: () => void }) {
         </div>
       </section>
 
-      <p className="muted small">Chat Web {__APP_VERSION__}{e.info?.app_version ? ` · Server ${e.info.app_version}` : ''}</p>
-
-      <section>
-        <h3>Geräte</h3>
-        <p className="muted small">Dein Konto kann auf mehreren Geräten gleichzeitig aktiv sein. Ein neues Gerät meldest du mit der Backup-Datei an; ein aktives Gerät nimmt es dann in deine Chats auf.</p>
-        <ul>
-          {devices.map((d) => (
-            <li key={d.id}>
-              <code>{d.id.slice(0, 8)}</code> · seit {new Date(d.created_at * 1000).toLocaleDateString()} {d.current && <strong>(dieses Gerät)</strong>}{' '}
-              {!d.current && <button className="link" onClick={() => { if (confirm('Gerät widerrufen? Es verliert Anmeldung und wird aus deinen Chats entfernt.')) void run(async () => { await e.revokeDevice(d.id); await loadDevices(); }, 'Gerät widerrufen.'); }}>widerrufen</button>}
-            </li>
-          ))}
-        </ul>
-        <DeviceLinkSection />
-      </section>
-
-      <section>
-        <h3>Backup &amp; Sitzung</h3>
-        <p className="muted small">Die Backup-Datei enthält deinen Konto-Schlüssel und den aktuellen Stand deiner Einstellungen und Kontakte (keinen Nachrichtenverlauf). Speichere sie erneut, wenn sich Kontakte oder Einstellungen geändert haben.</p>
-        <label>Backup-Passphrase<input type="password" value={backupPass} onChange={(x) => setBackupPass(x.target.value)} autoComplete="new-password" /></label>
-        <div className="row">
-          <button onClick={download}>Verschlüsseltes Backup laden</button>
-          <button onClick={() => e.lock().then(onClose)}>Sperren</button>
-          <button className="danger" onClick={() => { if (confirm('Konto lokal löschen? Ohne Backup ist es unwiederbringlich verloren.')) void e.deleteAccount(); }}>Konto lokal löschen</button>
+            </>
+          )}
+          {msg && <p className="small status-msg" role="status">{msg}</p>}
         </div>
-      </section>
-      {msg && <p className="small" role="status">{msg}</p>}
+      </div>
     </Dialog>
   );
 }
+
+type Cat = 'profile' | 'security' | 'privacy' | 'notify' | 'devices' | 'server';
+const CATS: { id: Cat; title: string; sub: string; icon: IconName }[] = [
+  { id: 'profile', title: 'Profil', sub: 'Bild, Kontaktlink, Chat-Code', icon: 'person' },
+  { id: 'security', title: 'Sicherheit', sub: 'Sperre, Passkey, Backup', icon: 'lock' },
+  { id: 'privacy', title: 'Privatsphäre', sub: 'Blockieren, Bestätigungen, Netzwerk', icon: 'privacy' },
+  { id: 'notify', title: 'Benachrichtigungen', sub: 'Ton', icon: 'notifications' },
+  { id: 'devices', title: 'Geräte', sub: 'Angemeldete Geräte, QR-Anmeldung', icon: 'devices' },
+  { id: 'server', title: 'Server & Speicher', sub: 'Speicherplatz, Einladungen, Version', icon: 'server' },
+];
 
 function ListEditor({ title, items, value, setValue, onAdd, onRemove, placeholder }: {
   title: string; items: string[]; value: string; setValue: (v: string) => void;

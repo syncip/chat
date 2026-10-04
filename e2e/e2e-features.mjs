@@ -1,11 +1,11 @@
 // Bestätigungen (gesendet/empfangen/gelesen), Einmal-Nachrichten, einklappbarer Code, mit Einstellungen pro Nutzer.
 import assert from 'node:assert/strict';
-import { chromium, CHROME, startServer, waitUp, register, contactLink, connect, send, seen, sleep, H } from './helpers.mjs';
+import { chromium, CHROME, startServer, waitUp, register, contactLink, connect, send, seen, sleep, H , openSettings } from './helpers.mjs';
 
 const server = startServer(18097);
 let browser;
 const setting = async (page, label, on) => {
-  await page.getByTitle('Einstellungen').click();
+  await openSettings(page, 'Privatsphäre');
   const box = page.getByLabel(label);
   if ((await box.isChecked()) !== on) await box.setChecked(on);
   await page.keyboard.press('Escape');
@@ -63,7 +63,6 @@ try {
   console.log('✔ Einmal-Nachricht: verdeckt, einmal sichtbar, danach gelöscht, Absender sieht „gelesen“');
 
   // Einmal-Nachrichten gibt es nur in 1:1: nach Sperren/Entsperren bleibt sie gelöscht
-  await alice.getByTitle('Einstellungen').click();
   await alice.getByRole('button', { name: 'Sperren', exact: true }).click();
   await alice.getByLabel('Passphrase', { exact: true }).fill('correct horse battery');
   await alice.getByRole('button', { name: 'Entsperren' }).click();

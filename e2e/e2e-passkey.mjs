@@ -1,6 +1,6 @@
 // Passkey-Entsperren (WebAuthn + PRF) mit virtuellem Authenticator.
 import assert from 'node:assert/strict';
-import { chromium, CHROME, startServer, waitUp, register, H, PASS } from './helpers.mjs';
+import { chromium, CHROME, startServer, waitUp, register, H, PASS , openSettings } from './helpers.mjs';
 
 const P = 18107;
 const server = startServer(P);
@@ -14,8 +14,7 @@ try {
   await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
   await page.goto(`http://${H}:${P}/`);
   await register(page, P, 'anna');
-  await page.getByTitle('Einstellungen').click();
-  const dlg = page.getByRole('dialog', { name: 'Einstellungen' });
+  const dlg = await openSettings(page, 'Sicherheit');
   await dlg.getByLabel('Passphrase für Passkey').fill('falsch falsch');
   await dlg.getByRole('button', { name: 'Passkey einrichten' }).click();
   await dlg.getByText('Passphrase ist falsch.').waitFor();

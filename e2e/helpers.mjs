@@ -75,8 +75,16 @@ export async function linkDevice(page, port, backupPath, newPass = PASS) {
   await page.getByText('● verbunden').waitFor({ timeout: 30000 });
 }
 
-export async function contactLink(page) {
+/** Öffnet die Einstellungen und darin eine Kategorie (Profil, Sicherheit, Privatsphäre, Benachrichtigungen, Geräte, Server). */
+export async function openSettings(page, cat) {
   await page.getByTitle('Einstellungen').click();
+  const dlg = page.getByRole('dialog', { name: 'Einstellungen' });
+  await dlg.getByRole('button', { name: new RegExp('^' + cat) }).click();
+  return dlg;
+}
+
+export async function contactLink(page) {
+  await openSettings(page, 'Profil');
   const link = await page.locator('input[readonly]').first().inputValue();
   await page.keyboard.press('Escape');
   return link;

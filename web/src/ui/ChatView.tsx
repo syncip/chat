@@ -1,3 +1,4 @@
+import { Icon } from './Icon';
 import { useEffect, useRef, useState } from 'react';
 import type { Conversation, Msg } from '../lib/types';
 import { memberAddresses, snippetOf } from '../lib/engine';
@@ -112,10 +113,10 @@ export function ChatView({ conv, onBack, onClosed }: { conv: Conversation; onBac
           )}
           {err && <div className="error small" role="alert">{err}</div>}
           <div className="row end">
-            <button title="Datei anhängen" onClick={() => fileInput.current?.click()} disabled={!!editing}>📎</button>
+            <button title="Datei anhängen" onClick={() => fileInput.current?.click()} disabled={!!editing} aria-label="Datei anhängen"><Icon name="attach" /></button>
             <input ref={fileInput} type="file" multiple hidden onChange={(x) => { setFiles([...files, ...Array.from(x.target.files ?? [])]); x.target.value = ''; }} />
             <button title="Codeblock" className={codeMode ? 'on' : ''} onClick={() => setCodeMode(!codeMode)} disabled={!!editing}>{'</>'}</button>
-            {conv.kind === 'dm' && <button title="Einmal-Nachricht (nach dem Lesen gelöscht)" className={once ? 'on' : ''} onClick={() => setOnce(!once)} disabled={!!editing}>🔒</button>}
+            {conv.kind === 'dm' && <button title="Einmal-Nachricht (nach dem Lesen gelöscht)" className={once ? 'on' : ''} onClick={() => setOnce(!once)} disabled={!!editing} aria-label="Einmal-Nachricht"><Icon name="timer" /></button>}
             {codeMode && <input className="lang" placeholder="Sprache" value={lang} onChange={(x) => setLang(x.target.value)} />}
             <textarea
               value={text} rows={codeMode ? 6 : 2} className={codeMode ? 'mono' : ''}
@@ -140,14 +141,14 @@ function ChatHeader({ conv, onBack, onInfo, onFiles }: { conv: Conversation; onB
   const sec = convSecurity(e, conv);
   return (
     <header className="chat-header">
-      <button className="back" onClick={onBack} aria-label="Zurück">←</button>
+      <button className="back icon-btn" onClick={onBack} aria-label="Zurück" title="Zurück"><Icon name="back" /></button>
       <Avatar name={conv.title} size={40} src={e.avatarOfConv(conv)} />
       <div className="grow"><strong>{conv.title}</strong>
         <div className="muted small">{e.isSelfChat(conv) ? 'Nur du · Notizen & Dateiablage' : conv.kind === 'group' ? `${memberAddresses(conv).length} Mitglieder` : 'Ende-zu-Ende-verschlüsselt'}{conv.disappearSeconds ? ` · ⏱ ${fmtDur(conv.disappearSeconds)}` : ''}</div>
       </div>
       <button className={`sec-chip ${sec.level}`} onClick={onInfo} title="Sicherheitsnummer vergleichen">🔒 {sec.label}</button>
-      <button onClick={onFiles} title="Dateien in diesem Chat" aria-label="Dateien">📁</button>
-      <button onClick={onInfo} aria-label="Details">ⓘ</button>
+      <button className="icon-btn" onClick={onFiles} title="Dateien in diesem Chat" aria-label="Dateien"><Icon name="folder" /></button>
+      <button className="icon-btn" onClick={onInfo} aria-label="Details" title="Details"><Icon name="info" /></button>
     </header>
   );
 }

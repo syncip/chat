@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import { Icon } from './Icon';
 
 export function Dialog({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
@@ -9,7 +10,7 @@ export function Dialog({ title, onClose, children, wide }: { title: string; onCl
   return (
     <div className="overlay" onClick={onClose}>
       <div className={`dialog card ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} onClick={(x) => x.stopPropagation()}>
-        <header><h2>{title}</h2><button onClick={onClose} aria-label="Schließen">✕</button></header>
+        <header><h2>{title}</h2><button className="icon-btn" onClick={onClose} aria-label="Schließen" title="Schließen"><Icon name="close" /></button></header>
         {children}
       </div>
     </div>

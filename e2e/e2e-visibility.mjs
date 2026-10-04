@@ -31,7 +31,7 @@ try {
   const jd = bob.getByRole('dialog', { name: 'Kanal beitreten' });
   await jd.getByRole('button', { name: 'Beitreten' }).click();
   await bob.locator('.chat-header', { hasText: 'Wechsel' }).waitFor({ timeout: 30000 });
-  await bob.getByText('privat-alt').waitFor({ timeout: 20000 });
+  await bob.locator('.messages').getByText('privat-alt').waitFor({ timeout: 20000 });
 
   // privat → öffentlich
   await alice.getByLabel('Details').click();
@@ -41,8 +41,8 @@ try {
   await info.getByText('✔ Gespeichert').waitFor({ timeout: 15000 });
   await alice.keyboard.press('Escape');
   await post(alice, 'oeffentlich-neu');
-  await bob.getByText('oeffentlich-neu').waitFor({ timeout: 25000 });
-  await bob.getByText('privat-alt').waitFor();
+  await bob.locator('.messages').getByText('oeffentlich-neu').waitFor({ timeout: 25000 });
+  await bob.locator('.messages').getByText('privat-alt').waitFor();
   console.log('✔ privat → öffentlich: Mitglied liest neue und alte Beiträge');
 
   // öffentlich → privat: Mitglied braucht neuen Link
@@ -57,8 +57,8 @@ try {
   await bob.getByLabel('Neuer Einladungslink').fill(link2);
   await bob.getByRole('button', { name: 'Schlüssel übernehmen' }).click();
   await post(alice, 'privat-neu');
-  await bob.getByText('privat-neu').waitFor({ timeout: 25000 });
-  await bob.getByText('oeffentlich-neu').waitFor();
+  await bob.locator('.messages').getByText('privat-neu').waitFor({ timeout: 25000 });
+  await bob.locator('.messages').getByText('oeffentlich-neu').waitFor();
   console.log('✔ öffentlich → privat: neuer Schlüssel per Link, Verlauf bleibt lesbar');
   console.log('VISIBILITY-E2E BESTANDEN');
 } catch (e) {

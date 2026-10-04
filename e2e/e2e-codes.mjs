@@ -1,6 +1,6 @@
 // Chat-Code („martinistcool“) und Kontakt-QR für neue Chats sowie QR-Anmeldung eines weiteren Geräts.
 import assert from 'node:assert/strict';
-import { chromium, CHROME, startServer, waitUp, register, sleep, H } from './helpers.mjs';
+import { chromium, CHROME, startServer, waitUp, register, sleep, H , openSettings } from './helpers.mjs';
 
 const P = 18108;
 const server = startServer(P);
@@ -13,14 +13,14 @@ try {
   await register(alice, P, 'martin');
   await register(bob, P, 'bob');
 
-  await alice.getByTitle('Einstellungen').click();
-  let dlg = alice.getByRole('dialog', { name: 'Einstellungen' });
+  let dlg = await openSettings(alice, 'Profil');
   await dlg.getByLabel('Chat-Code').fill('MartinIstCool');
   await dlg.getByRole('button', { name: 'Code speichern' }).click();
   await dlg.getByText('Chat-Code „martinistcool“ gespeichert.').waitFor();
   await dlg.getByRole('button', { name: 'Meinen Kontakt-QR-Code anzeigen' }).click();
   await dlg.getByRole('img', { name: 'QR-Code deines Kontaktlinks' }).locator('svg').waitFor();
   console.log('✔ Chat-Code gespeichert, Kontakt-QR angezeigt');
+  await dlg.getByRole('button', { name: /^Geräte/ }).click();
   await dlg.getByRole('button', { name: 'QR-Code anzeigen' }).click(); // Geräte-QR
   await dlg.getByRole('img', { name: 'QR-Code zum Anmelden eines Geräts' }).locator('svg').waitFor({ timeout: 15000 });
   console.log('✔ Geräte-QR-Code erzeugt');

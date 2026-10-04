@@ -1,6 +1,6 @@
 // Multi-Device: zweites Gerät per Backup-Datei, Chats erscheinen automatisch, beide Geräte lesen/schreiben, Widerruf.
 import assert from 'node:assert/strict';
-import { chromium, CHROME, startServer, waitUp, register, linkDevice, contactLink, connect, send, seen, sleep, H } from './helpers.mjs';
+import { chromium, CHROME, startServer, waitUp, register, linkDevice, contactLink, connect, send, seen, sleep, H , openSettings } from './helpers.mjs';
 
 const server = startServer(18099);
 let browser;
@@ -47,7 +47,7 @@ try {
   console.log('✔ Gerät 1 → Bob; Gerät 2 sieht sie');
 
   // Geräteliste und Widerruf von Gerät 1 aus
-  await a1.getByTitle('Einstellungen').click();
+  await openSettings(a1, 'Geräte');
   await a1.getByText('(dieses Gerät)').waitFor();
   assert.equal(await a1.locator('li', { hasText: 'seit' }).count(), 2);
   a1.once('dialog', (d) => d.accept());

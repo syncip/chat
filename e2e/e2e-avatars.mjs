@@ -1,5 +1,5 @@
 // Profil-, Gruppen- und Kanalbilder.
-import { chromium, CHROME, startServer, waitUp, register, contactLink, connect, H } from './helpers.mjs';
+import { chromium, CHROME, startServer, waitUp, register, contactLink, connect, H , openSettings } from './helpers.mjs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
@@ -37,8 +37,7 @@ try {
   await connect(bob, alice, await contactLink(alice), `bob@${H}:${P}`);
 
   // Profilbild: Alice setzt es, Bob sieht es in der Chatliste
-  await alice.getByTitle('Einstellungen').click();
-  const sd = alice.getByRole('dialog', { name: 'Einstellungen' });
+  const sd = await openSettings(alice, 'Profil');
   await sd.getByLabel('Profilbild wählen').setInputFiles(file());
   await sd.getByText('Profilbild gesetzt.').waitFor({ timeout: 15000 });
   await alice.keyboard.press('Escape');

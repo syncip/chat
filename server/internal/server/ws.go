@@ -120,6 +120,10 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		_ = c.Close(websocket.StatusPolicyViolation, "unauthorized")
 		return
 	}
+	if u.Banned(time.Now().Unix()) {
+		_ = c.Close(websocket.StatusPolicyViolation, "suspended")
+		return
+	}
 	ch := s.hub.subscribe(u.ID, dev.ID)
 	defer s.hub.unsubscribe(u.ID, dev.ID, ch)
 	ctx = c.CloseRead(r.Context())

@@ -175,14 +175,15 @@ func (s *Server) adminPutSettings(w http.ResponseWriter, r *http.Request, u *sto
 }
 
 func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request, u *store.User) {
-	us, err := s.st.ListUsers()
+	us, err := s.st.ListUsers(r.URL.Query().Get("q"), 0)
 	if err != nil {
 		writeErr(w, 500, "internal error")
 		return
 	}
 	out := make([]map[string]any, 0, len(us))
 	for _, x := range us {
-		out = append(out, map[string]any{"name": x.Name, "admin": x.Admin, "created_at": x.CreatedAt, "devices": x.Devices, "blob_bytes": x.BlobBytes, "channels": x.Channels})
+		out = append(out, map[string]any{"name": x.Name, "admin": x.Admin, "created_at": x.CreatedAt, "devices": x.Devices, "blob_bytes": x.BlobBytes, "channels": x.Channels,
+			"banned_until": x.BannedUntil, "ban_reason": x.BanReason, "rate_limit": x.RateLimit, "rate_until": x.RateUntil})
 	}
 	writeJSON(w, 200, map[string]any{"users": out})
 }
@@ -202,6 +203,60 @@ func (s *Server) adminSetAdmin(w http.ResponseWriter, r *http.Request, u *store.
 	case err != nil:
 		writeErr(w, 500, "internal error")
 	default:
+		writeJSON(w, 200, map[string]any{"status": "ok"})
+	}
+}
+
+// adminRestrict sperrt einen Nutzer oder begrenzt dessen Anfragerate.
+// ban: "" (keine) | "perm" | "temp" (mit ban_minutes). rate_limit: Anfragen/Minute (0 = Standard), rate_minutes: Dauer (0 = unbefristet).
+func (s *Server) adminRestrict(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct {
+		Ban         string `json:"ban"`
+		BanMinutes  int64  `json:"ban_minutes"`
+		Reason      string `json:"reason"`
+		RateLimit   int    `json:"rate_limit"`
+		RateMinutes int64  `json:"rate_minutes"`
+	}
+	if !readJSON(w, r, 1<<10, &in) {
+		return
+	}
+	name := r.PathValue("name")
+	if name == u.Name {
+		writeErr(w, 409, "you cannot restrict yourself")
+		return
+	}
+	const maxMin = 10 * 365 * 24 * 60
+	if in.RateLimit < 0 || in.RateLimit > 100000 || in.BanMinutes < 0 || in.BanMinutes > maxMin || in.RateMinutes < 0 || in.RateMinutes > maxMin || len(in.Reason) > 300 {
+		writeErr(w, 400, "invalid parameters")
+		return
+	}
+	var until, rateUntil int64
+	switch in.Ban {
+	case "":
+	case "perm":
+		until = -1
+	case "temp":
+		if in.BanMinutes < 1 {
+			writeErr(w, 400, "ban_minutes required")
+			return
+		}
+		until = time.Now().Add(time.Duration(in.BanMinutes) * time.Minute).Unix()
+	default:
+		writeErr(w, 400, "invalid ban")
+		return
+	}
+	if in.RateLimit > 0 && in.RateMinutes > 0 {
+		rateUntil = time.Now().Add(time.Duration(in.RateMinutes) * time.Minute).Unix()
+	}
+	switch err := s.st.SetRestriction(name, until, in.Reason, in.RateLimit, rateUntil); {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, 404, "not found")
+	case errors.Is(err, store.ErrLimit):
+		writeErr(w, 409, "administrators cannot be banned")
+	case err != nil:
+		writeErr(w, 500, "internal error")
+	default:
+		s.userLim.reset(name)
 		writeJSON(w, 200, map[string]any{"status": "ok"})
 	}
 }

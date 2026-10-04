@@ -43,6 +43,11 @@ export function decodeCard(text: string): ContactCard {
 
 type Listener = () => void;
 
+export interface AdminUser {
+  name: string; admin: boolean; created_at: number; devices: number; blob_bytes: number; channels: number;
+  banned_until: number; ban_reason: string; rate_limit: number; rate_until: number;
+}
+
 export class Engine {
   core!: Core;
   client: Client | null = null;
@@ -1508,8 +1513,11 @@ export class Engine {
   saveAdminSettings(st: Record<string, unknown>) {
     return this.api!.call<Record<string, unknown>>('PUT', '/v1/admin/settings', st);
   }
-  adminUsers() {
-    return this.api!.call<{ users: { name: string; admin: boolean; created_at: number; devices: number; blob_bytes: number; channels: number }[] }>('GET', '/v1/admin/users');
+  adminUsers(q = '') {
+    return this.api!.call<{ users: AdminUser[] }>('GET', `/v1/admin/users${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+  }
+  restrictUser(name: string, r: { ban?: '' | 'perm' | 'temp'; ban_minutes?: number; reason?: string; rate_limit?: number; rate_minutes?: number }) {
+    return this.api!.call('PUT', `/v1/admin/users/${encodeURIComponent(name)}/restrict`, r);
   }
   setAdmin(name: string, admin: boolean) {
     return this.api!.call('PUT', `/v1/admin/users/${encodeURIComponent(name)}/admin`, { admin });

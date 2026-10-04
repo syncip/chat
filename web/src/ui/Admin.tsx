@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { formatBytes } from '../lib/util';
 import { useEngine } from './hooks';
+import type { AdminUser } from '../lib/engine';
 import { Dialog } from './Dialog';
 
 type Tab = 'stats' | 'settings' | 'users';
@@ -134,26 +135,91 @@ function ServerSettings() {
   );
 }
 
+const UNITS: [string, number][] = [['Minuten', 1], ['Stunden', 60], ['Tage', 1440]];
+
 function Users() {
   const e = useEngine();
-  const [us, setUs] = useState<Awaited<ReturnType<typeof e.adminUsers>>['users']>([]);
+  const [us, setUs] = useState<AdminUser[]>([]);
+  const [q, setQ] = useState('');
   const [err, setErr] = useState('');
-  const load = () => e.adminUsers().then((r) => setUs(r.users)).catch((x) => setErr((x as Error).message));
+  const [sel, setSel] = useState<AdminUser | null>(null);
+  const load = (query = q) => e.adminUsers(query).then((r) => setUs(r.users)).catch((x) => setErr((x as Error).message));
   useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const now = Date.now() / 1000;
+  const banLabel = (u: AdminUser) => (u.banned_until === -1 ? 'Dauerhaft gesperrt' : u.banned_until > now ? `Gesperrt bis ${new Date(u.banned_until * 1000).toLocaleString()}` : '');
+  const rateLabel = (u: AdminUser) => (u.rate_limit > 0 && (u.rate_until === 0 || u.rate_until > now) ? `Limit ${u.rate_limit}/Min${u.rate_until ? ` bis ${new Date(u.rate_until * 1000).toLocaleString()}` : ''}` : '');
   return (
     <>
+      <form className="row" onSubmit={(ev) => { ev.preventDefault(); void load(); }}>
+        <input aria-label="Nutzer suchen" placeholder="Nutzer suchen …" value={q} onChange={(ev) => setQ(ev.target.value)} />
+        <button type="submit">Suchen</button>
+      </form>
       <ul className="members">
         {us.map((u) => (
           <li key={u.name}>
             <div className="grow">
               <strong>{u.name}</strong> {u.admin && <span className="ok">Admin</span>}
+              {banLabel(u) && <span className="error"> {banLabel(u)}{u.ban_reason ? ` (${u.ban_reason})` : ''}</span>}
+              {rateLabel(u) && <span className="muted"> · {rateLabel(u)}</span>}
               <div className="muted small">seit {new Date(u.created_at * 1000).toLocaleDateString()} · {u.devices} Geräte · {formatBytes(u.blob_bytes)} Dateien · {u.channels} Kanäle</div>
             </div>
             <button onClick={async () => { setErr(''); try { await e.setAdmin(u.name, !u.admin); await load(); } catch (x) { setErr((x as Error).message); } }}>{u.admin ? 'Admin entziehen' : 'Zum Admin machen'}</button>
+            {!u.admin && <button onClick={() => setSel(u)}>Sperren / Limit …</button>}
           </li>
         ))}
+        {us.length === 0 && <li className="muted">Keine Nutzer gefunden.</li>}
       </ul>
       {err && <p className="error">{err}</p>}
+      {sel && <RestrictDialog user={sel} onClose={() => setSel(null)} onDone={() => { setSel(null); void load(); }} />}
     </>
+  );
+}
+
+function RestrictDialog({ user, onClose, onDone }: { user: AdminUser; onClose: () => void; onDone: () => void }) {
+  const e = useEngine();
+  const now = Date.now() / 1000;
+  const [ban, setBan] = useState<'' | 'perm' | 'temp'>(user.banned_until === -1 ? 'perm' : user.banned_until > now ? 'temp' : '');
+  const [dur, setDur] = useState(1);
+  const [unit, setUnit] = useState(60);
+  const [reason, setReason] = useState(user.ban_reason);
+  const [rate, setRate] = useState(user.rate_limit > 0 ? String(user.rate_limit) : '');
+  const [rdur, setRdur] = useState(0);
+  const [runit, setRunit] = useState(60);
+  const [err, setErr] = useState('');
+  const save = async () => {
+    setErr('');
+    try {
+      await e.restrictUser(user.name, { ban, ban_minutes: ban === 'temp' ? dur * unit : 0, reason, rate_limit: Number(rate) || 0, rate_minutes: rdur * runit });
+      onDone();
+    } catch (x) { setErr((x as Error).message); }
+  };
+  return (
+    <Dialog title={`Sperre für ${user.name}`} onClose={onClose}>
+      <div>
+        <label>Sperre
+          <select aria-label="Sperre-Art" value={ban} onChange={(ev) => setBan(ev.target.value as '' | 'perm' | 'temp')}>
+            <option value="">Keine</option><option value="temp">Zeitweise</option><option value="perm">Dauerhaft (Bann)</option>
+          </select>
+        </label>
+        {ban === 'temp' && (
+          <div className="row">
+            <input type="number" min={1} aria-label="Dauer" value={dur} onChange={(ev) => setDur(Math.max(1, Number(ev.target.value)))} />
+            <select aria-label="Einheit" value={unit} onChange={(ev) => setUnit(Number(ev.target.value))}>{UNITS.map(([n, v]) => <option key={n} value={v}>{n}</option>)}</select>
+          </div>
+        )}
+        {ban !== '' && <label>Grund (optional, sieht der Nutzer)<input value={reason} maxLength={300} onChange={(ev) => setReason(ev.target.value)} /></label>}
+        <label>Nachrichten-/Anfragelimit pro Minute (leer = Standard)<input type="number" min={0} value={rate} onChange={(ev) => setRate(ev.target.value)} /></label>
+        {Number(rate) > 0 && (
+          <div className="row">
+            <input type="number" min={0} aria-label="Limit-Dauer" value={rdur} onChange={(ev) => setRdur(Math.max(0, Number(ev.target.value)))} />
+            <select aria-label="Limit-Einheit" value={runit} onChange={(ev) => setRunit(Number(ev.target.value))}>{UNITS.map(([n, v]) => <option key={n} value={v}>{n}</option>)}</select>
+            <span className="muted small">0 = unbefristet</span>
+          </div>
+        )}
+        <p className="muted small">Eine Sperre beendet sofort jeden Zugriff des Kontos auf diesen Server (Postfächer, Sync, Dateien, Kanäle). Nachrichten werden Ende-zu-Ende zugestellt und sind dem Server nicht zuordenbar; das Limit drosselt daher alle authentifizierten Anfragen des Kontos.</p>
+        {err && <p className="error">{err}</p>}
+        <div className="row"><button onClick={onClose}>Abbrechen</button><button className="primary" onClick={save}>Speichern</button></div>
+      </div>
+    </Dialog>
   );
 }

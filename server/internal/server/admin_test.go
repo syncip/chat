@@ -211,3 +211,50 @@ func TestPublicChannelAndNtfyWebhooks(t *testing.T) {
 	owner.chanCall("DELETE", "/v1/channels/"+pc.ID+"/hooks/"+hl.Hooks[0]["id"].(string), nil, 200, nil)
 	post("POST", hk.Path, "weg", nil, 404)
 }
+
+func TestAdminSearchBanAndRateLimit(t *testing.T) {
+	n := newNode(t, nil)
+	admin := n.mustUser("martin")
+	anna := n.mustUser("anna")
+	bob := n.mustUser("bob")
+
+	var us struct{ Users []map[string]any }
+	admin.call("GET", "/v1/admin/users?q=AN", nil, 200, &us)
+	if len(us.Users) != 1 || us.Users[0]["name"] != "anna" {
+		t.Fatalf("suche: %+v", us)
+	}
+	admin.call("GET", "/v1/admin/users?q=%25", nil, 200, &us) // Wildcard wird escaped
+	if len(us.Users) != 0 {
+		t.Fatalf("wildcard: %+v", us)
+	}
+
+	// Nicht-Admins dürfen nicht; Admin nicht sich selbst / keine Admins
+	anna.call("PUT", "/v1/admin/users/bob/restrict", map[string]any{"ban": "perm"}, 403, nil)
+	admin.call("PUT", "/v1/admin/users/martin/restrict", map[string]any{"ban": "perm"}, 409, nil)
+	admin.call("PUT", "/v1/admin/users/nobody/restrict", map[string]any{"ban": "perm"}, 404, nil)
+	admin.call("PUT", "/v1/admin/users/anna/restrict", map[string]any{"ban": "temp"}, 400, nil)
+
+	// temporäre Sperre
+	admin.call("PUT", "/v1/admin/users/anna/restrict", map[string]any{"ban": "temp", "ban_minutes": 30, "reason": "spam"}, 200, nil)
+	anna.call("GET", "/v1/me", nil, 403, nil)
+	admin.call("GET", "/v1/admin/users?q=anna", nil, 200, &us)
+	if us.Users[0]["banned_until"].(float64) <= float64(time.Now().Unix()) || us.Users[0]["ban_reason"] != "spam" {
+		t.Fatalf("%+v", us.Users[0])
+	}
+	// aufheben
+	admin.call("PUT", "/v1/admin/users/anna/restrict", map[string]any{"ban": ""}, 200, nil)
+	anna.call("GET", "/v1/me", nil, 200, nil)
+
+	// dauerhaft
+	admin.call("PUT", "/v1/admin/users/bob/restrict", map[string]any{"ban": "perm"}, 200, nil)
+	bob.call("GET", "/v1/me", nil, 403, nil)
+	admin.call("PUT", "/v1/admin/users/bob/restrict", map[string]any{"ban": ""}, 200, nil)
+
+	// Anfragelimit: 2 pro Minute
+	admin.call("PUT", "/v1/admin/users/bob/restrict", map[string]any{"rate_limit": 2, "rate_minutes": 10}, 200, nil)
+	bob.call("GET", "/v1/me", nil, 200, nil)
+	bob.call("GET", "/v1/me", nil, 200, nil)
+	bob.call("GET", "/v1/me", nil, 429, nil)
+	admin.call("PUT", "/v1/admin/users/bob/restrict", map[string]any{}, 200, nil)
+	bob.call("GET", "/v1/me", nil, 200, nil)
+}

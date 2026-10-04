@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,14 +18,25 @@ type UserRow struct {
 	Devices   int
 	BlobBytes int64
 	Channels  int
+
+	BannedUntil int64
+	BanReason   string
+	RateLimit   int
+	RateUntil   int64
 }
 
-func (s *Store) ListUsers() ([]UserRow, error) {
+// ListUsers: q filtert per Teilstring im Namen (case-insensitive), limit ≤ 500.
+func (s *Store) ListUsers(q string, limit int) ([]UserRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(q))
 	rows, err := s.db.Query(`SELECT u.name,u.is_admin,u.created_at,
  (SELECT COUNT(*) FROM devices d WHERE d.user_id=u.id),
  COALESCE((SELECT SUM(size) FROM blobs b WHERE b.user_id=u.id),0),
- (SELECT COUNT(*) FROM channels c WHERE c.owner_user=u.id)
- FROM users u ORDER BY u.id`)
+ (SELECT COUNT(*) FROM channels c WHERE c.owner_user=u.id),
+ u.banned_until,u.ban_reason,u.rate_limit,u.rate_until
+ FROM users u WHERE lower(u.name) LIKE ? ESCAPE '\' ORDER BY u.id LIMIT ?`, "%"+esc+"%", limit)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +45,7 @@ func (s *Store) ListUsers() ([]UserRow, error) {
 	for rows.Next() {
 		var r UserRow
 		var adm int
-		if err := rows.Scan(&r.Name, &adm, &r.CreatedAt, &r.Devices, &r.BlobBytes, &r.Channels); err != nil {
+		if err := rows.Scan(&r.Name, &adm, &r.CreatedAt, &r.Devices, &r.BlobBytes, &r.Channels, &r.BannedUntil, &r.BanReason, &r.RateLimit, &r.RateUntil); err != nil {
 			return nil, err
 		}
 		r.Admin = adm == 1
@@ -230,4 +242,21 @@ func (s *Store) AppendHookPost(chID, postID, hookName string, tsMillis int64, da
 		return 0, ErrConflict
 	}
 	return res.LastInsertId()
+}
+
+// SetRestriction setzt Sperre und Anfragelimit. bannedUntil: 0 = keine, -1 = dauerhaft, sonst Unix-Ende.
+// Administratoren können nicht gesperrt werden.
+func (s *Store) SetRestriction(name string, bannedUntil int64, reason string, rate int, rateUntil int64) error {
+	var adm int
+	if err := s.db.QueryRow(`SELECT is_admin FROM users WHERE name=?`, name).Scan(&adm); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if adm == 1 && bannedUntil != 0 {
+		return ErrLimit
+	}
+	_, err := s.db.Exec(`UPDATE users SET banned_until=?,ban_reason=?,rate_limit=?,rate_until=? WHERE name=?`,
+		bannedUntil, reason, rate, rateUntil, name)
+	return err
 }

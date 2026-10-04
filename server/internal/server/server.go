@@ -41,6 +41,7 @@ type Server struct {
 	chans    *chanHub
 	nonces   *nonceCache
 	limiter  *limiter
+	userLim  *userLimits
 	fed      *federation
 	webHash  string
 	blobDir  string
@@ -56,6 +57,7 @@ func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Server, error)
 		chans:   newChanHub(),
 		nonces:  newNonceCache(5 * time.Minute),
 		limiter: newLimiter(cfg.RatePerMinute),
+		userLim: newUserLimits(),
 		blobDir: filepath.Join(cfg.DataDir, "blobs"),
 		stop:    make(chan struct{}),
 	}
@@ -142,6 +144,7 @@ func (s *Server) routes() {
 	m.HandleFunc("PUT /v1/admin/settings", s.adminOnly(s.adminPutSettings))
 	m.HandleFunc("GET /v1/admin/users", s.adminOnly(s.adminUsers))
 	m.HandleFunc("PUT /v1/admin/users/{name}/admin", s.adminOnly(s.adminSetAdmin))
+	m.HandleFunc("PUT /v1/admin/users/{name}/restrict", s.adminOnly(s.adminRestrict))
 	m.HandleFunc("GET /v1/sync", s.auth(s.getSync))
 	m.HandleFunc("PUT /v1/sync", s.auth(s.putSync))
 	// Kanäle

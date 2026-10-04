@@ -171,13 +171,29 @@ type User struct {
 	IK         []byte
 	FilterMode string
 	Quota      int64
+	// Sperre: BannedUntil -1 = dauerhaft, >0 = Unix-Zeit des Endes. RateLimit: Anfragen/Minute (0 = Standard).
+	BannedUntil int64
+	BanReason   string
+	RateLimit   int
+	RateUntil   int64 // 0 = unbefristet
+}
+
+// Banned meldet, ob die Sperre zum Zeitpunkt now (Unix) aktiv ist.
+func (u *User) Banned(now int64) bool { return u.BannedUntil == -1 || u.BannedUntil > now }
+
+// EffectiveRate liefert das aktive Nutzerlimit (0 = keines).
+func (u *User) EffectiveRate(now int64) int {
+	if u.RateLimit > 0 && (u.RateUntil == 0 || u.RateUntil > now) {
+		return u.RateLimit
+	}
+	return 0
 }
 
 func (s *Store) UserByName(name string) (*User, error) {
 	u := &User{}
 	var adm int
-	err := s.db.QueryRow(`SELECT id,name,ik,filter_mode,quota,is_admin,created_at FROM users WHERE name=?`, name).
-		Scan(&u.ID, &u.Name, &u.IK, &u.FilterMode, &u.Quota, &adm, &u.CreatedAt)
+	err := s.db.QueryRow(`SELECT id,name,ik,filter_mode,quota,is_admin,created_at,banned_until,ban_reason,rate_limit,rate_until FROM users WHERE name=?`, name).
+		Scan(&u.ID, &u.Name, &u.IK, &u.FilterMode, &u.Quota, &adm, &u.CreatedAt, &u.BannedUntil, &u.BanReason, &u.RateLimit, &u.RateUntil)
 	u.Admin = adm == 1
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -743,6 +759,12 @@ func (s *Store) migrate() error {
 	}
 	if err := addCol("channel_log", "hook", "TEXT"); err != nil {
 		return err
+	}
+	for _, c := range [][2]string{{"banned_until", "INTEGER NOT NULL DEFAULT 0"}, {"ban_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"rate_limit", "INTEGER NOT NULL DEFAULT 0"}, {"rate_until", "INTEGER NOT NULL DEFAULT 0"}} {
+		if err := addCol("users", c[0], c[1]); err != nil {
+			return err
+		}
 	}
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE is_admin=1`).Scan(&n); err != nil {

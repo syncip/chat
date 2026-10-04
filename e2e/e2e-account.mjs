@@ -49,6 +49,19 @@ try {
   await dlg.getByText('Gespeichert und aktiv').waitFor();
   await dlg.getByRole('tab', { name: 'Nutzer' }).click();
   await dlg.getByText('bob').waitFor();
+  await dlg.getByLabel('Nutzer suchen').fill('BO');
+  await dlg.getByRole('button', { name: 'Suchen' }).click();
+  await dlg.getByRole('button', { name: 'Sperren / Limit …' }).click();
+  const rd = alice.getByRole('dialog', { name: 'Sperre für bob' });
+  await rd.getByLabel('Sperre-Art').selectOption('temp');
+  await rd.getByLabel('Dauer', { exact: true }).fill('2');
+  await rd.getByLabel('Einheit').selectOption('1440');
+  await rd.getByRole('button', { name: 'Speichern' }).click();
+  await dlg.getByText(/Gesperrt bis/).waitFor();
+  await dlg.getByRole('button', { name: 'Sperren / Limit …' }).click();
+  await rd.getByLabel('Sperre-Art').selectOption('');
+  await rd.getByRole('button', { name: 'Speichern' }).click();
+  await dlg.getByText(/Gesperrt bis/).waitFor({ state: 'detached' });
   await alice.keyboard.press('Escape');
   console.log('✔ Admin (erster Nutzer): Statistik, Einstellungen speichern, Nutzerliste');
 

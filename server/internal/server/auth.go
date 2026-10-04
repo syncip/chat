@@ -85,6 +85,29 @@ func (s *Server) verifySig(domain, method, uri string, a map[string]string, body
 	return u, d, true
 }
 
+// gate lehnt gesperrte oder überlastete Konten ab (403/429) und meldet, ob die Anfrage weiterlaufen darf.
+func (s *Server) gate(w http.ResponseWriter, u *store.User) bool {
+	now := time.Now().Unix()
+	if u.Banned(now) {
+		msg := "account suspended"
+		if u.BannedUntil > 0 {
+			msg += " until " + time.Unix(u.BannedUntil, 0).UTC().Format(time.RFC3339)
+		} else {
+			msg += " permanently"
+		}
+		if u.BanReason != "" {
+			msg += ": " + u.BanReason
+		}
+		writeErr(w, http.StatusForbidden, msg)
+		return false
+	}
+	if n := u.EffectiveRate(now); n > 0 && !s.userLim.allow(u.Name, n) {
+		writeErr(w, http.StatusTooManyRequests, "account rate limited")
+		return false
+	}
+	return true
+}
+
 type userHandler func(w http.ResponseWriter, r *http.Request, u *store.User)
 
 // auth: Body wird gelesen (≤ 2 MiB) und in die Signatur einbezogen.
@@ -106,6 +129,9 @@ func (s *Server) auth(h userHandler) http.HandlerFunc {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		if !s.gate(w, u) {
+			return
+		}
 		r.Body = io.NopCloser(strings.NewReader(string(body)))
 		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, d)), u)
 	}
@@ -123,6 +149,9 @@ func (s *Server) authStream(h userHandler) http.HandlerFunc {
 		u, d, ok := s.verifySig(s.conf().Domain, r.Method, r.URL.RequestURI(), a, "UNSIGNED")
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if !s.gate(w, u) {
 			return
 		}
 		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, d)), u)

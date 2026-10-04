@@ -132,3 +132,28 @@ func hashDir(dir string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// userLimits: Anfragelimit pro Konto (vom Admin gesetzt), zusätzlich zum IP-Limit.
+type userLimits struct {
+	mu sync.Mutex
+	m  map[string]*limiter
+}
+
+func newUserLimits() *userLimits { return &userLimits{m: map[string]*limiter{}} }
+
+func (l *userLimits) allow(name string, perMinute int) bool {
+	l.mu.Lock()
+	lim, ok := l.m[name]
+	if !ok || int(lim.max) != perMinute {
+		lim = newLimiter(perMinute)
+		l.m[name] = lim
+	}
+	l.mu.Unlock()
+	return lim.allow("u")
+}
+
+func (l *userLimits) reset(name string) {
+	l.mu.Lock()
+	delete(l.m, name)
+	l.mu.Unlock()
+}

@@ -217,7 +217,11 @@ fun UnlockScreen(vm: AppViewModel, activity: FragmentActivity) {
         vm.run(onError = { err = it; busy = false }) { vm.engine.unlock(p); busy = false }
     }
     fun bioPrompt() = BiometricHelper.unlock(activity) { r -> r.onSuccess { unlock(it) }.onFailure { err = "Biometrie abgebrochen oder fehlgeschlagen." } }
-    LaunchedEffect(Unit) { if (bio) bioPrompt() }
+    LaunchedEffect(Unit) {
+        // Nach dem Sperren per Knopf nicht sofort wieder abfragen (sonst wirkt „Sperren“ wirkungslos); beim Öffnen der App schon.
+        if (bio && !vm.lockedManually) bioPrompt()
+        vm.lockedManually = false
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -242,7 +246,15 @@ fun UnlockScreen(vm: AppViewModel, activity: FragmentActivity) {
                 onDigit = { d -> if (pin.length < PinHelper.MAX_LEN) { pin += d; err = "" } },
                 onDelete = { pin = pin.dropLast(1) },
                 onOk = {
-                    PinHelper.unlock(activity, pin).onSuccess { pin = ""; unlock(it) }.onFailure { err = it.message ?: "PIN falsch."; pin = ""; pinOn = PinHelper.isEnrolled(activity); if (!pinOn) usePass = true }
+                    val entered = pin
+                    busy = true; err = ""
+                    vm.run(onError = { err = it; busy = false }) {
+                        // PBKDF2 (310 000 Runden) dauert auf dem Handy spürbar: nicht im UI-Thread rechnen.
+                        val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { PinHelper.unlock(activity, entered) }
+                        pin = ""
+                        r.onSuccess { vm.engine.unlock(it); busy = false }
+                            .onFailure { err = it.message ?: "PIN falsch."; busy = false; pinOn = PinHelper.isEnrolled(activity); if (!pinOn) usePass = true }
+                    }
                 },
                 okEnabled = pin.length >= PinHelper.MIN_LEN,
             )

@@ -74,6 +74,7 @@ object BiometricHelper {
             .setConfirmationRequired(false)
         if (Build.VERSION.SDK_INT < 30) b.setNegativeButtonText("Abbrechen") // mit Geräte-Anmeldedaten ist kein Abbrechen-Knopf erlaubt
         val info = b.build()
+        (activity.application as? ChatApp)?.expectSystemUi()
         BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), cb).authenticate(info, BiometricPrompt.CryptoObject(cipher))
     }
 

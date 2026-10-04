@@ -21,6 +21,14 @@ class ChatApp : Application() {
     @Volatile var visible = false
     private var lockJob: Job? = null
 
+    /**
+     * Bis zu diesem Zeitpunkt ist ein Wechsel in eine System-Oberfläche erwartet (Fingerabdruck/Geräte-PIN, Dateiauswahl, Kamera).
+     * Dann sperrt die App nicht sofort beim Verlassen, sondern frühestens danach – sonst würde z. B. das Einrichten des
+     * Fingerabdrucks die App mitten im Vorgang sperren.
+     */
+    @Volatile private var externalUntil = 0L
+    fun expectSystemUi(ms: Long = 120_000) { externalUntil = System.currentTimeMillis() + ms }
+
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
@@ -45,6 +53,7 @@ class ChatApp : Application() {
 
     fun onForeground() {
         visible = true
+        externalUntil = 0
         engine.nudge()
         lockJob?.cancel()
         Notifications.clearMessages(this)
@@ -54,8 +63,9 @@ class ChatApp : Application() {
     fun onBackground() {
         visible = false
         lockJob?.cancel()
+        val grace = (externalUntil - System.currentTimeMillis()).coerceAtLeast(0)
         lockJob = appScope.launch {
-            delay(prefs.autoLockMinutes * 60_000L)
+            delay(maxOf(prefs.autoLockMinutes * 60_000L, grace))
             if (engine.phase.value == Phase.Unlocked) engine.lock()
         }
     }

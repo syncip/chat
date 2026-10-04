@@ -77,6 +77,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearError() { _error.value = null }
+
+    /** Manuell gesperrt (Knopf): danach nicht sofort automatisch die Fingerabdruck-Abfrage öffnen. */
+    var lockedManually = false
+
+    fun lockNow() {
+        lockedManually = true
+        run { engine.lock() }
+    }
     fun showError(msg: String) { _error.value = msg }
 
     /** Führt eine Aktion aus und zeigt Fehler als Meldung an. */

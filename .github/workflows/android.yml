@@ -124,7 +124,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: App + Test-APK bauen
         working-directory: android
-        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease
       - name: Tests auf dem Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -134,7 +134,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: android
-          script: ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.chatServer=10.0.2.2:18200 -Pandroid.testInstrumentationRunnerArguments.chatAdminKey=emulator-admin-key || (adb logcat -d | grep -iE "chat|AndroidRuntime|okhttp" | tail -n 300; exit 1)
+          script: |
+            ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.chatServer=10.0.2.2:18200 -Pandroid.testInstrumentationRunnerArguments.chatAdminKey=emulator-admin-key || (adb logcat -d | grep -iE "chat|AndroidRuntime|okhttp" | tail -n 300; exit 1)
+            python3 scripts/release_smoke.py app/build/outputs/apk/release/app-release.apk
       - name: Server-Log und Test-Berichte
         if: always()
         run: |

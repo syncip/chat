@@ -154,7 +154,7 @@ fun HomeScreen(vm: AppViewModel, s: AppState, online: Boolean, isAdmin: Boolean)
                 },
                 actions = {
                     IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, contentDescription = "Suchen") }
-                    IconButton(onClick = { vm.run { vm.engine.lock() } }, modifier = Modifier.testTag("btn_lock")) { Icon(Icons.Filled.Lock, contentDescription = "Sperren") }
+                    IconButton(onClick = { vm.lockNow() }, modifier = Modifier.testTag("btn_lock")) { Icon(Icons.Filled.Lock, contentDescription = "Sperren") }
                     Box {
                         IconButton(onClick = { menu = true }, modifier = Modifier.testTag("btn_menu")) {
                             BadgedBox(badge = { if (sec == Level.Bad || sec == Level.Warn) Badge(containerColor = levelColor(sec)) }) { Icon(Icons.Filled.MoreVert, contentDescription = "Menü") }
@@ -164,7 +164,7 @@ fun HomeScreen(vm: AppViewModel, s: AppState, online: Boolean, isAdmin: Boolean)
                             DropdownMenuItem(text = { Text("Alle Dateien") }, leadingIcon = { Icon(Icons.Filled.Folder, null) }, onClick = { menu = false; vm.go(Route.Files(null)) })
                             DropdownMenuItem(text = { Text("Sicherheit") }, leadingIcon = { Icon(Icons.Filled.Shield, null, tint = levelColor(sec)) }, onClick = { menu = false; dialog = "security" })
                             if (isAdmin) DropdownMenuItem(text = { Text("Administration") }, leadingIcon = { Icon(Icons.Filled.AdminPanelSettings, null) }, onClick = { menu = false; vm.go(Route.Admin) })
-                            DropdownMenuItem(text = { Text("Sperren") }, leadingIcon = { Icon(Icons.Filled.Lock, null) }, onClick = { menu = false; vm.run { vm.engine.lock() } })
+                            DropdownMenuItem(text = { Text("Sperren") }, leadingIcon = { Icon(Icons.Filled.Lock, null) }, onClick = { menu = false; vm.lockNow() })
                         }
                     }
                 },

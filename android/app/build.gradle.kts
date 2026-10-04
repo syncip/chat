@@ -92,7 +92,7 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
-    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.biometric:biometric:1.2.0-alpha05")
     implementation("androidx.core:core-ktx:1.15.0")
     // QR-Code scannen (ohne Google Play Services) und erzeugen.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

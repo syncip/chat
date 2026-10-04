@@ -62,6 +62,13 @@ class MainActivity : FragmentActivity() {
         else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
 
+    // Alle Activity-Result-Aufrufe (Dateiauswahl, Speichern, Kamera, Geräte-PIN) laufen hierüber: kurz nicht automatisch sperren.
+    @Deprecated("Activity Result API nutzt das intern")
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        app.expectSystemUi()
+        @Suppress("DEPRECATION") super.startActivityForResult(intent, requestCode, options)
+    }
+
     override fun onStart() {
         super.onStart()
         app.onForeground()

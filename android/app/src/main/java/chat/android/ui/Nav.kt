@@ -23,16 +23,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import chat.engine.Phase
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun AppRoot(activity: FragmentActivity, onSecureChanged: () -> Unit, vm: AppViewModel = viewModel()) {
     val phase by vm.phase.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    // Test-Tags auch für UI Automator sichtbar machen (Emulator-Test der Release-APK).
+    Surface(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }, color = MaterialTheme.colorScheme.background) {
         when (phase) {
             Phase.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             Phase.NoAccount -> OnboardingScreen(vm)

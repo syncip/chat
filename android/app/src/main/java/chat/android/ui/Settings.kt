@@ -108,7 +108,7 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
                         Text(s.me.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                OutlinedButton(onClick = { run { vm.engine.lock() } }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Filled.Lock, null); Text("  Jetzt sperren") }
+                OutlinedButton(onClick = { vm.lockNow() }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Filled.Lock, null); Text("  Jetzt sperren") }
                 SettingsRow(Icons.Filled.Person, "Profil & Kontakt", "Profilbild, Kontaktlink, Chat-Code, QR", "set_profile") { page = "profile" }
                 SettingsRow(Icons.Filled.Security, "Sicherheit & Entsperren", "App-PIN, Fingerabdruck, automatische Sperre", "set_security") { page = "security" }
                 SettingsRow(Icons.Filled.PrivacyTip, "Datenschutz", "Blockieren, Netzwerk, Bestätigungen", "set_privacy") { page = "privacy" }
@@ -198,7 +198,7 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
                 listOf(0, 1, 5, 15).forEach { m -> FilterChip(selected = autolock == m, onClick = { autolock = m; prefs.autoLockMinutes = m }, label = { Text(if (m == 0) "Sofort" else "$m") }) }
             }
             Text("Mindestlänge für Passphrasen: ${prefs.minPassphrase} Zeichen (vom Server-Admin festgelegt).", style = MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick = { run { vm.engine.lock() } }) { Text("🔒 Jetzt sperren") }
+            OutlinedButton(onClick = { vm.lockNow() }) { Text("🔒 Jetzt sperren") }
             }
             if (page == "diag") {
                 DiagnosticsSection(vm)
@@ -224,7 +224,7 @@ fun SettingsScreen(vm: AppViewModel, activity: FragmentActivity, s: AppState, on
                     if (backupPass.length < prefs.minPassphrase) { msg = "Die Passphrase braucht mindestens ${prefs.minPassphrase} Zeichen."; return@OutlinedButton }
                     run { pendingBackup = vm.engine.exportBackup(backupPass); save.launch("chat-backup-${s.me.name}.bak") }
                 }) { Text("Backup speichern") }
-                OutlinedButton(onClick = { run { vm.engine.lock() } }) { Text("Sperren") }
+                OutlinedButton(onClick = { vm.lockNow() }) { Text("Sperren") }
             }
             TextButton(onClick = { run { vm.engine.deleteAccount(); wipeSecrets(activity) } }) { Text("Konto lokal löschen", color = MaterialTheme.colorScheme.error) }
             }
@@ -395,7 +395,8 @@ private fun QuickUnlockSection(vm: AppViewModel, activity: FragmentActivity, onM
             if (pin != pin2) { err = "Die PINs stimmen nicht überein."; return@Button }
             vm.run(onError = { err = it }) {
                 if (!vm.engine.checkPassphrase(pass)) throw IllegalStateException("Falsche Passphrase.")
-                PinHelper.enable(ctx, pass, pin)
+                val p = pass; val n = pin
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { PinHelper.enable(ctx, p, n) }
                 pinOn = true; pin = ""; pin2 = ""; pass = ""
                 onMsg("App-PIN gespeichert. Nach 5 falschen Eingaben wird sie gelöscht.")
             }

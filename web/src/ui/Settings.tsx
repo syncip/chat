@@ -231,7 +231,7 @@ function ChatCodeSection({ link }: { link: string }) {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [qr, setQr] = useState(false);
-  useEffect(() => { e.myChatCode().then((c) => { setSaved(c); setCode(c); }).catch(() => undefined); }, [e]);
+  useEffect(() => { e.myChatCode().then((c) => { setSaved(c); setCode((cur) => cur || c); }).catch(() => undefined); }, [e]);
   return (
     <div>
       <strong>Mein Chat-Code &amp; QR-Code</strong>
